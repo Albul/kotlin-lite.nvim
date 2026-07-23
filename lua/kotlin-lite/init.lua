@@ -41,6 +41,12 @@ function M.init()
     end, { desc = "kotlin-lite: clear the extracted jar cache" })
 end
 
+-- snacks.nvim explorer opts (compact middle packages + kotlin-aware actions).
+-- Merge into your snacks config: picker.sources.explorer.
+function M.explorer_opts()
+    return require("kotlin-lite.snacks").explorer_opts()
+end
+
 -- apply user options; re-applies keymaps/filetypes if already initialized
 function M.setup(opts)
     require("kotlin-lite.config").setup(opts)

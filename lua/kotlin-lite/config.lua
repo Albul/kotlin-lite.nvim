@@ -3,6 +3,11 @@
 
 local M = {}
 
+-- codicon glyph by codepoint (avoids embedding raw nerd-font bytes in source)
+local function u(cp)
+    return vim.fn.nr2char(cp)
+end
+
 M.defaults = {
     filetypes = { "kotlin" },
     cache_dir = vim.fn.stdpath("cache") .. "/kotlin-lite-jars",
@@ -10,23 +15,53 @@ M.defaults = {
         "~/.gradle/caches/modules-2/files-2.1",
         "~/.m2/repository",
     },
-    -- buffer-local 'equalprg' for kotlin, driving the `=` operator
-    formatprg = "ktlint --format --stdin",
+    -- whole-buffer formatter for <leader>cf; stdin in, formatted source on stdout
+    -- (--log-level=none keeps ktlint's log lines out of the buffer)
+    formatprg = "ktlint --format --stdin --log-level=none",
+    -- opt-in: also map `=` (normal + visual) to whole-buffer format. Off by
+    -- default so `=` keeps Neovim's native reindent.
+    format_on_equal = false,
+    -- file-structure icons (nerd-font codicons; override with plain text if you
+    -- don't use a nerd font)
+    symbols = {
+        icons = {
+            class     = u(0xeb5b), --
+            interface = u(0xeb61), --
+            object    = u(0xea8b), --
+            companion = u(0xea8b), --
+            ["fun"]   = u(0xea8c), --
+            field     = u(0xeb5f), --
+        },
+    },
     -- also register IntelliJ-style keymaps on top of the vim ones
     intellij_keymaps = false,
+    -- optional snacks.nvim explorer integration (compact middle packages etc.)
+    snacks_integration = true,
+    -- `run_file` / `run_project` terminal split
+    run = {
+        height = 15,
+        -- gradle project property carrying the main class for `run_file`
+        main_property = "mainClass",
+    },
     -- lhs per action; a string or a list, false to disable
     keymaps = {
         goto_definition    = "gd",
         hover              = "K",
         signature_help     = "gK",
-        find_usages        = { "gr", "<leader>fu" },
+        -- gu + grr (grr shadows nvim's LSP references map in kotlin buffers only)
+        find_usages        = { "gu", "grr" },
         rename             = "<leader>cr",
+        rename_file        = "<leader>cR",
+        format             = "<leader>cf",
         file_structure     = "<leader>cs",
         project_symbols    = "<leader>cS",
-        reveal_in_explorer = "<leader>fe",
+        reveal_in_explorer = "<leader>ke",
         alternate_file     = "<leader>ka",
         copy_fqname        = "<leader>kc",
         auto_import        = "<leader>ki",
+        run_file           = "<leader>kr",
+        run_project        = "<leader>kR",
+        find_files         = "<leader><leader>",
     },
 }
 

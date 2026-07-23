@@ -74,9 +74,11 @@ end
 -- in-buffer declaration search (vim regex via matchbufline)
 -------------------------------------------------------------------
 
--- vim-regex decl patterns for `w`, \zs sets match start at the name
+-- vim-regex decl patterns for `w`, \zs sets match start at the name.
+-- \C forces case-sensitivity (Kotlin ids differ by case; user 'ignorecase' must
+-- not make `Circle` match `circle`).
 function M.buffer_decl_patterns(w)
-    return {
+    local pats = {
         -- val / var (incl. generics and extension receiver)
         [=[\<\%(val\|var\)\s\+\%(<[^>]*>\s\+\)\?\%([A-Za-z0-9_.<>?, ]\+\.\)\?\zs\<]=] .. w .. [=[\>]=],
         -- destructuring declaration: val (a, b) = ...
@@ -94,6 +96,10 @@ function M.buffer_decl_patterns(w)
         -- for-loop variable: "for (name in ...)"
         [=[\<for\s*(\s*\zs\<]=] .. w .. [=[\>\ze\s\+in\>]=],
     }
+    for i, p in ipairs(pats) do
+        pats[i] = [=[\C]=] .. p
+    end
+    return pats
 end
 
 function M.is_comment_line(buf, lnum)

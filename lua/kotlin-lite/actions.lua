@@ -167,8 +167,34 @@ function M.find_usages()
 end
 
 -------------------------------------------------------------------
--- rename (<leader>cr): project-wide word search & replace
+-- rename (<leader>cr): word search & replace, scoped to `dir`
 -------------------------------------------------------------------
+
+-- rg -w `word` under `dir`, confirm, then cfdo replace word -> new
+local function replace_word(word, new, dir, scope_label)
+    search.rg({ "-w", "-e", word }, { dir }, function(items)
+        if #items == 0 then
+            vim.notify("kotlin-lite: nothing to replace", vim.log.levels.INFO)
+            return
+        end
+        local files = {}
+        for _, it in ipairs(items) do files[it.filename] = true end
+        local msg = ("Replace %d occurrences of '%s' -> '%s' in %d files (%s)?")
+            :format(#items, word, new, vim.tbl_count(files), scope_label)
+        if vim.fn.confirm(msg, "&Yes\n&No", 2) ~= 1 then return end
+
+        local cur_buf = vim.api.nvim_get_current_buf()
+        local view = vim.fn.winsaveview()
+        vim.fn.setqflist({}, " ", { title = "Rename: " .. word .. " -> " .. new, items = items })
+        vim.cmd(("silent! cfdo %%s/\\V\\<%s\\>/%s/ge | update"):format(word, new))
+        if vim.api.nvim_buf_is_valid(cur_buf) then
+            vim.api.nvim_set_current_buf(cur_buf)
+            vim.fn.winrestview(view)
+        end
+        vim.notify(("kotlin-lite: replaced in %d files"):format(vim.tbl_count(files)), vim.log.levels.INFO)
+    end)
+end
+
 function M.rename()
     local word = vim.fn.expand("<cword>")
     if word == "" then return end
@@ -178,70 +204,304 @@ function M.rename()
             vim.notify("kotlin-lite: '" .. new .. "' is not a valid identifier", vim.log.levels.ERROR)
             return
         end
-        search.rg({ "-w", "-e", word }, { search.root() }, function(items)
-            if #items == 0 then
-                vim.notify("kotlin-lite: nothing to replace", vim.log.levels.INFO)
-                return
-            end
-            local files = {}
-            for _, it in ipairs(items) do files[it.filename] = true end
-            local msg = ("Replace %d occurrences of '%s' -> '%s' in %d files?")
-                :format(#items, word, new, vim.tbl_count(files))
-            if vim.fn.confirm(msg, "&Yes\n&No", 2) ~= 1 then return end
-
-            local cur_buf = vim.api.nvim_get_current_buf()
-            local view = vim.fn.winsaveview()
-            vim.fn.setqflist({}, " ", { title = "Rename: " .. word .. " -> " .. new, items = items })
-            vim.cmd(("silent! cfdo %%s/\\V\\<%s\\>/%s/ge | update"):format(word, new))
-            if vim.api.nvim_buf_is_valid(cur_buf) then
-                vim.api.nvim_set_current_buf(cur_buf)
-                vim.fn.winrestview(view)
-            end
-            vim.notify(("kotlin-lite: replaced in %d files"):format(vim.tbl_count(files)), vim.log.levels.INFO)
-        end)
+        replace_word(word, new, search.root(), "project")
     end)
 end
 
 -------------------------------------------------------------------
--- file structure (Ctrl+F12) and go-to-symbol in project (Ctrl+N)
+-- rename file (<leader>cR): move the file and, for a same-named
+-- top-level entity, offer a module-scoped symbol rename
 -------------------------------------------------------------------
-local symbol_specs = {
-    { kind = "fun",       pat = [=[\<fun\s\+\%(<[^>]*>\s\+\)\?\zs[A-Za-z0-9_.<>?, ]\{-}[A-Za-z0-9_]\ze\s*(]=] },
-    { kind = "class",     pat = [=[\<class\s\+\zs[A-Za-z0-9_]\+]=] },
-    { kind = "interface", pat = [=[\<interface\s\+\zs[A-Za-z0-9_]\+]=] },
-    { kind = "object",    pat = [=[\<object\s\+\zs[A-Za-z0-9_]\+]=] },
-    { kind = "typealias", pat = [=[\<typealias\s\+\zs[A-Za-z0-9_]\+]=] },
-    { kind = "val",       pat = [=[\<val\s\+\%(<[^>]*>\s\+\)\?\zs[A-Za-z0-9_]\+]=] },
-    { kind = "var",       pat = [=[\<var\s\+\%(<[^>]*>\s\+\)\?\zs[A-Za-z0-9_]\+]=] },
+
+-- kind of a top-level class/interface/object/fun named `name`, or nil.
+-- Anchored at column 0 (optional lowercase modifiers) so nested decls are ignored.
+local function toplevel_entity(lines, name)
+    local esc = vim.pesc(name)
+    for _, l in ipairs(lines) do
+        if l:match("^%S") then -- top-level only: no indentation
+            for _, k in ipairs({ "class", "interface", "object" }) do
+                if l:match("^[%l ]*" .. k .. "%s+" .. esc .. "%f[%W]") then return k end
+            end
+            if l:match("^[%l ]*fun%s+" .. esc .. "%s*[(<]") then return "fun" end
+        end
+    end
+    return nil
+end
+M._toplevel_entity = toplevel_entity
+
+local function read_lines(path)
+    local b = vim.fn.bufnr("^" .. path .. "$")
+    if b ~= -1 and vim.api.nvim_buf_is_loaded(b) then
+        return vim.api.nvim_buf_get_lines(b, 0, -1, false)
+    end
+    local ok, l = pcall(vim.fn.readfile, path)
+    return ok and l or {}
+end
+
+-- Rename `old_path`; keep an open buffer attached, refresh via on_done.
+function M.rename_path(old_path, on_done)
+    if not old_path or old_path == "" then
+        vim.notify("kotlin-lite: no file to rename", vim.log.levels.WARN)
+        return
+    end
+    local dir = vim.fn.fnamemodify(old_path, ":h")
+    local ext = vim.fn.fnamemodify(old_path, ":e")
+    local old_base = vim.fn.fnamemodify(old_path, ":t:r")
+
+    vim.ui.input({ prompt = "Rename file -> ", default = old_base }, function(new_base)
+        if not new_base or new_base == "" or new_base == old_base then return end
+        local new_name = ext ~= "" and (new_base .. "." .. ext) or new_base
+        local new_path = dir .. "/" .. new_name
+        if vim.fn.filereadable(new_path) == 1 then
+            vim.notify("kotlin-lite: '" .. new_name .. "' already exists", vim.log.levels.ERROR)
+            return
+        end
+
+        -- detect the entity before moving (read from buffer or disk)
+        local entity = ext == "kt" and toplevel_entity(read_lines(old_path), old_base) or nil
+
+        local bufnr = vim.fn.bufnr("^" .. old_path .. "$")
+        if bufnr ~= -1 and vim.api.nvim_buf_is_loaded(bufnr) then
+            vim.api.nvim_buf_call(bufnr, function()
+                vim.cmd("keepalt saveas! " .. vim.fn.fnameescape(new_path))
+            end)
+            vim.fn.delete(old_path)
+            local stale = vim.fn.bufnr("^" .. old_path .. "$")
+            if stale ~= -1 and stale ~= bufnr then
+                pcall(vim.api.nvim_buf_delete, stale, { force = true })
+            end
+        else
+            vim.fn.mkdir(dir, "p")
+            if vim.fn.rename(old_path, new_path) ~= 0 then
+                vim.notify("kotlin-lite: rename failed", vim.log.levels.ERROR)
+                return
+            end
+        end
+        vim.notify("kotlin-lite: renamed to " .. new_name, vim.log.levels.INFO)
+        if on_done then on_done(new_path) end
+
+        if entity and new_base:match("^[%a_][%w_]*$") then
+            local q = ("Also rename %s '%s' -> '%s' in the module?"):format(entity, old_base, new_base)
+            if vim.fn.confirm(q, "&Yes\n&No", 2) == 1 then
+                local module_root = vim.fs.root(new_path, { "build.gradle.kts", "build.gradle" }) or search.root()
+                replace_word(old_base, new_base, module_root, "module")
+            end
+        end
+    end)
+end
+
+function M.rename_file()
+    M.rename_path(vim.api.nvim_buf_get_name(0))
+end
+
+-------------------------------------------------------------------
+-- file structure (<leader>cs): a scope-aware outline
+--
+-- Shows top-level val/var/fun/class/interface/object, class members (fun +
+-- public val/var incl. primary-constructor properties) and companion objects.
+-- Hides function locals, plain parameters, and private/protected members.
+-------------------------------------------------------------------
+
+local MODIFIERS = {
+    public = true, private = true, protected = true, internal = true,
+    open = true, final = true, abstract = true, sealed = true, data = true,
+    enum = true, annotation = true, inner = true, value = true, inline = true,
+    infix = true, operator = true, suspend = true, override = true,
+    lateinit = true, const = true, external = true, tailrec = true,
+    companion = true, actual = true, expect = true,
 }
 
-function M.file_structure()
-    local buf = vim.api.nvim_get_current_buf()
-    local items = {}
-    for _, spec in ipairs(symbol_specs) do
-        local ok, found = pcall(vim.fn.matchbufline, buf, spec.pat, 1, "$")
-        if ok then
-            for _, m in ipairs(found) do
-                if not search.is_comment_line(buf, m.lnum) then
-                    table.insert(items, {
-                        lnum = m.lnum,
-                        col = m.byteidx,
-                        kind = spec.kind,
-                        name = m.text,
-                    })
+-- drop line comments and string contents so their braces/parens don't count
+local function code_only(line)
+    return (line:gsub("//.*$", ""):gsub('"[^"]*"', '""'):gsub("'[^']*'", "''"))
+end
+
+-- consume leading modifier words; return the modifier set and the remainder
+local function split_modifiers(s)
+    local mods = {}
+    while true do
+        local w, rest = s:match("^(%a+)%s+(.*)$")
+        if w and MODIFIERS[w] then mods[w] = true; s = rest else break end
+    end
+    return mods, s
+end
+
+local function hidden(mods)
+    return mods.private or mods.protected or false
+end
+
+-- inside of the first balanced (...) in `text`, or nil
+local function first_paren_group(text)
+    local i = text:find("(", 1, true)
+    if not i then return nil end
+    local depth = 0
+    for j = i, #text do
+        local c = text:sub(j, j)
+        if c == "(" then depth = depth + 1
+        elseif c == ")" then
+            depth = depth - 1
+            if depth == 0 then return text:sub(i + 1, j - 1) end
+        end
+    end
+    return nil
+end
+
+-- split on top-level commas (ignoring <>, (), [] nesting)
+local function split_params(inside)
+    local params, depth, buf = {}, 0, ""
+    for k = 1, #inside do
+        local c = inside:sub(k, k)
+        if c == "<" or c == "(" or c == "[" then depth = depth + 1; buf = buf .. c
+        elseif c == ">" or c == ")" or c == "]" then depth = depth - 1; buf = buf .. c
+        elseif c == "," and depth == 0 then params[#params + 1] = buf; buf = ""
+        else buf = buf .. c end
+    end
+    if buf:match("%S") then params[#params + 1] = buf end
+    return params
+end
+
+-- a declaration at the start of `raw`, or nil
+local function detect_decl(raw)
+    local s = raw:gsub("^%s+", ""):gsub("^@[%w_.]+%s*", "")
+    local mods, rest = split_modifiers(s)
+    local hide = hidden(mods)
+
+    if mods.companion and rest:match("^object%f[%W]") then
+        return { kind = "companion", name = rest:match("^object%s+([%w_]+)") or "companion",
+            hide = hide, opens_type = true, member_ok = true }
+    end
+    if rest:match("^fun%s+interface%f[%W]") then
+        return { kind = "interface", name = rest:match("^fun%s+interface%s+([%w_]+)"),
+            hide = hide, opens_type = true, top_ok = true, member_ok = true }
+    end
+
+    local kw = rest:match("^(%a+)%f[%W]")
+    if kw == "class" or kw == "interface" or kw == "object" then
+        return { kind = kw, name = rest:match("^%a+%s+([%w_]+)"),
+            hide = hide, opens_type = true, top_ok = true, member_ok = true }
+    elseif kw == "fun" then
+        return { kind = "fun", name = rest:match("([%w_]+)%s*%("),
+            hide = hide, top_ok = true, member_ok = true }
+    elseif kw == "val" or kw == "var" then
+        local body = rest:gsub("^va[lr]%s+", ""):gsub("^<[^>]*>%s*", "")
+        local name = body:match("^([%w_]+)%s*[:=]")
+            or body:match("^([%w_]+)%s+by%f[%W]")
+            or body:match("([%w_]+)%s*[:=]")
+            or body:match("^([%w_]+)")
+        return { kind = "field", name = name, hide = hide, top_ok = true, member_ok = true }
+    end
+    return nil
+end
+
+-- public val/var properties declared in a class's primary constructor
+local function ctor_props(lines, start_lnum)
+    local code, depth, started, endl = {}, 0, false, start_lnum
+    for i = start_lnum, math.min(#lines, start_lnum + 30) do
+        local c = code_only(lines[i])
+        code[#code + 1] = c
+        for ch in c:gmatch("[()]") do
+            if ch == "(" then depth = depth + 1; started = true else depth = depth - 1 end
+        end
+        endl = i
+        if started and depth <= 0 then break end
+        if not started and c:find("{") then break end -- body before any ctor
+    end
+    local inside = started and first_paren_group(table.concat(code, "\n")) or nil
+    if not inside then return {} end
+
+    local out = {}
+    for _, p in ipairs(split_params(inside)) do
+        local ps = p:gsub("^%s+", ""):gsub("^@[%w_.]+%s*", "")
+        local mods, rest = split_modifiers(ps)
+        if rest:match("^va[lr]%f[%W]") and not hidden(mods) then
+            local nm = rest:match("^va[lr]%s+([%w_]+)")
+            if nm then
+                local lnum, col = start_lnum, 0
+                for i = start_lnum, endl do
+                    local idx = lines[i]:find("%f[%w]" .. nm .. "%f[%W]")
+                    if idx then lnum, col = i, idx - 1; break end
                 end
+                out[#out + 1] = { name = nm, lnum = lnum, col = col }
             end
         end
     end
+    return out
+end
+
+-- Outline items for `lines`, in source order.
+--
+-- Tracks brace scopes ("type" = class/interface/object body, else block/func) and
+-- paren depth. Declarations are only read at the start of a line outside parens,
+-- so multi-line constructor/parameter lists don't leak in. `pending` carries a
+-- declaration's body kind to its `{`, which may be lines away (multi-line ctor).
+local function scan_symbols(lines)
+    local items, scopes = {}, {} -- scopes: stack of "type"|"block"
+    local paren, pending = 0, nil
+
+    local function type_depth()
+        local n = 0
+        for _, s in ipairs(scopes) do if s == "type" then n = n + 1 end end
+        return n
+    end
+
+    for lnum, raw in ipairs(lines) do
+        if paren == 0 then
+            local decl = detect_decl(raw)
+            if decl and decl.name then
+                local scope = scopes[#scopes]
+                local show = (scope == nil and decl.top_ok) or (scope == "type" and decl.member_ok)
+                if show and not decl.hide then
+                    items[#items + 1] = {
+                        lnum = lnum, col = (raw:find(decl.name, 1, true) or 1) - 1,
+                        kind = decl.kind, name = decl.name, depth = type_depth(),
+                    }
+                end
+                if decl.kind == "class" and (scope == nil or scope == "type") and not decl.hide then
+                    local d = type_depth() + 1
+                    for _, pr in ipairs(ctor_props(lines, lnum)) do
+                        items[#items + 1] = { lnum = pr.lnum, col = pr.col, kind = "field",
+                            name = pr.name, depth = d }
+                    end
+                end
+                pending = decl.opens_type and "type" or "block"
+            end
+        end
+
+        local code = code_only(raw)
+        for i = 1, #code do
+            local c = code:sub(i, i)
+            if c == "(" then
+                paren = paren + 1
+            elseif c == ")" then
+                if paren > 0 then paren = paren - 1 end
+            elseif c == "{" then
+                if paren == 0 and pending then
+                    scopes[#scopes + 1], pending = pending, nil
+                else
+                    scopes[#scopes + 1] = "block"
+                end
+            elseif c == "}" and #scopes > 0 then
+                scopes[#scopes] = nil
+            end
+        end
+    end
+    return items
+end
+M._scan_symbols = scan_symbols
+
+function M.file_structure()
+    local buf = vim.api.nvim_get_current_buf()
+    local items = scan_symbols(vim.api.nvim_buf_get_lines(buf, 0, -1, false))
     if #items == 0 then
         vim.notify("kotlin-lite: no symbols in this file", vim.log.levels.INFO)
         return
     end
-    table.sort(items, function(a, b) return a.lnum < b.lnum end)
+    local icons = cfg().symbols.icons
     vim.ui.select(items, {
         prompt = "File structure",
         format_item = function(it)
-            return ("%s  [%s]  :%d"):format(it.name, it.kind, it.lnum)
+            return (icons[it.kind] or icons.field) .. "  "
+                .. string.rep("  ", it.depth or 0) .. it.name
         end,
     }, function(choice)
         if choice then
@@ -280,45 +540,77 @@ function M.project_symbols()
 end
 
 -------------------------------------------------------------------
--- reveal current file in the snacks explorer (Alt+F1)
+-- recent files (IntelliJ Ctrl+E), best-effort across common pickers
 -------------------------------------------------------------------
-function M.reveal_in_explorer()
-    local ok, Snacks = pcall(require, "snacks")
-    if not (ok and Snacks.explorer) then
-        vim.notify("kotlin-lite: snacks.nvim explorer is not available", vim.log.levels.WARN)
-        return
-    end
-    local picker
-    if Snacks.explorer.reveal then
-        picker = Snacks.explorer.reveal()
-    else
-        picker = Snacks.explorer()
-    end
-    if picker then pcall(function() picker:focus() end) end
+function M.recent_files()
+    local ok, telescope = pcall(require, "telescope.builtin")
+    if ok then return telescope.oldfiles() end
+    local ok2, Snacks = pcall(require, "snacks")
+    if ok2 and Snacks.picker then return Snacks.picker.recent() end
+    vim.cmd("browse oldfiles")
 end
 
 -------------------------------------------------------------------
--- alternate file: src/main/kotlin/X.kt <-> src/test/kotlin/XTest.kt
+-- alternate file: X.kt <-> XTest.kt (by `Test` suffix, wherever it lives)
 -------------------------------------------------------------------
+
+local function open_file(path)
+    vim.cmd("normal! m'")
+    vim.cmd.edit(vim.fn.fnameescape(path))
+end
+
+-- conventional path to create the counterpart when none exists yet
+local function mirror_path(dir, base, is_test)
+    if is_test then
+        local src = base:gsub("Test$", "")
+        if dir:find("src/test/", 1, true) then
+            return (dir:gsub("src/test/", "src/main/")) .. "/" .. src .. ".kt"
+        end
+        return dir .. "/" .. src .. ".kt"
+    else
+        if dir:find("src/main/", 1, true) then
+            return (dir:gsub("src/main/", "src/test/")) .. "/" .. base .. "Test.kt"
+        end
+        return dir .. "/" .. base .. "Test.kt"
+    end
+end
+
 function M.alternate_file()
     local path = vim.api.nvim_buf_get_name(0)
-    if path == "" then return end
+    if path == "" then
+        vim.notify("kotlin-lite: no file", vim.log.levels.WARN)
+        return
+    end
+    local dir = vim.fn.fnamemodify(path, ":h")
+    local base = vim.fn.fnamemodify(path, ":t:r")
+    local is_test = base:match("Test$") ~= nil
+    local counterpart = is_test and base:gsub("Test$", "") or (base .. "Test")
 
-    local target
-    if path:find("src/main/kotlin/", 1, true) then
-        target = path:gsub("src/main/kotlin/", "src/test/kotlin/"):gsub("%.kt$", "Test.kt")
-    elseif path:find("src/test/kotlin/", 1, true) then
-        target = path:gsub("src/test/kotlin/", "src/main/kotlin/"):gsub("Test%.kt$", ".kt")
-    else
-        vim.notify("kotlin-lite: not under src/main/kotlin or src/test/kotlin", vim.log.levels.WARN)
+    -- search the module for the existing counterpart (any directory layout)
+    local root = vim.fs.root(path, { "build.gradle.kts", "build.gradle" }) or search.root()
+    local hits = vim.fs.find(counterpart .. ".kt", { path = root, type = "file", limit = 50 })
+    hits = vim.tbl_filter(function(p) return p ~= path end, hits)
+
+    if #hits == 1 then
+        open_file(hits[1])
+        return
+    elseif #hits > 1 then
+        vim.ui.select(hits, {
+            prompt = (is_test and "Source for " or "Test for ") .. base,
+            format_item = function(p) return vim.fn.fnamemodify(p, ":.") end,
+        }, function(choice)
+            if choice then open_file(choice) end
+        end)
         return
     end
 
-    if vim.fn.filereadable(target) == 0 then
-        vim.fn.mkdir(vim.fn.fnamemodify(target, ":h"), "p")
-    end
-    vim.cmd("normal! m'")
-    vim.cmd.edit(vim.fn.fnameescape(target))
+    -- none found: offer to scaffold it at the conventional location
+    local target = mirror_path(dir, base, is_test)
+    local q = ("No %s found. Create %s?"):format(
+        is_test and "source" or "test", vim.fn.fnamemodify(target, ":."))
+    if vim.fn.confirm(q, "&Yes\n&No", 1) ~= 1 then return end
+    vim.fn.mkdir(vim.fn.fnamemodify(target, ":h"), "p")
+    open_file(target)
 end
 
 -------------------------------------------------------------------
@@ -342,15 +634,39 @@ function M.copy_fqname()
 end
 
 -------------------------------------------------------------------
--- format via 'equalprg' (ktlint by default)
+-- format the whole buffer through `formatprg` (ktlint by default)
 -------------------------------------------------------------------
+-- Always whole-file: ktlint reindents from column 0, so piping a partial range
+-- would flatten nested declarations. stdout replaces the buffer; stderr (logs)
+-- is dropped.
 function M.format_buffer()
-    if vim.bo.equalprg == "" then
-        vim.notify("kotlin-lite: no formatter set (equalprg)", vim.log.levels.WARN)
+    local prg = cfg().formatprg
+    if not prg or prg == "" then
+        vim.notify("kotlin-lite: no formatter configured (formatprg)", vim.log.levels.WARN)
         return
     end
+    local buf = vim.api.nvim_get_current_buf()
+    local input = table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n") .. "\n"
+
+    local ok, res = pcall(function()
+        return vim.system(vim.split(prg, "%s+"), { stdin = input, text = true }):wait()
+    end)
+    if not ok then
+        vim.notify("kotlin-lite: formatter failed to start: " .. tostring(res), vim.log.levels.ERROR)
+        return
+    end
+    if (res.stdout == nil or res.stdout == "") and res.code ~= 0 then
+        vim.notify("kotlin-lite: format failed\n" .. (res.stderr or ""), vim.log.levels.ERROR)
+        return
+    end
+
+    local out = vim.split(res.stdout, "\n")
+    if out[#out] == "" then table.remove(out) end -- drop trailing newline
+    if vim.deep_equal(out, vim.api.nvim_buf_get_lines(buf, 0, -1, false)) then
+        return -- already formatted; don't touch undo/modified
+    end
     local view = vim.fn.winsaveview()
-    vim.cmd("silent keepjumps normal! gg=G")
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, out)
     vim.fn.winrestview(view)
 end
 
