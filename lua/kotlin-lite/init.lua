@@ -32,6 +32,9 @@ function M.init()
     require("kotlin-lite.jars").setup()
     register()
 
+    -- deferred so startup isn't blocked (the find + unzip are async anyway)
+    vim.schedule(function() require("kotlin-lite.jars").auto_extract() end)
+
     vim.api.nvim_create_user_command("KotlinSources", function()
         require("kotlin-lite.jars").pick_sources_jar()
     end, { desc = "kotlin-lite: extract a *-sources.jar for navigation" })

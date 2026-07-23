@@ -370,6 +370,43 @@ do
 end
 
 -------------------------------------------------------------------
+-- Test 18: sources jar version parsing / latest-per-artifact
+-------------------------------------------------------------------
+do
+    local jars = require("kotlin-lite.jars")
+
+    local a1, v1 = jars._parse_nv("kotlin-stdlib-jdk8-2.2.10-sources.jar")
+    check("jars: parse artifact with suffix", a1 == "kotlin-stdlib-jdk8" and v1 == "2.2.10")
+    local a2, v2 = jars._parse_nv("kotlin-stdlib-2.4.0-sources.jar")
+    check("jars: parse plain artifact", a2 == "kotlin-stdlib" and v2 == "2.4.0")
+
+    check("jars: 2.2.0 < 2.10.0 (numeric)", jars._ver_lt("2.2.0", "2.10.0") == true)
+    check("jars: equal versions not <", jars._ver_lt("2.4.0", "2.4.0") == false)
+    check("jars: pre-release < release", jars._ver_lt("2.4.0-RC", "2.4.0") == true)
+
+    -- distinct artifacts kept; each collapsed to its newest version
+    local latest = jars._latest_by_artifact({
+        "/c/kotlin-stdlib-2.0.0-sources.jar",
+        "/c/kotlin-stdlib-2.2.0-sources.jar",
+        "/c/kotlin-stdlib-2.4.0-sources.jar",
+        "/c/kotlin-stdlib-jdk8-1.9.24-sources.jar",
+    })
+    local picked = {}
+    for _, e in ipairs(latest) do picked[e.artifact] = e.version end
+    check("jars: stdlib collapses to newest 2.4.0", picked["kotlin-stdlib"] == "2.4.0")
+    check("jars: jdk8 kept as a distinct artifact", picked["kotlin-stdlib-jdk8"] == "1.9.24")
+    check("jars: only 2 artifacts after collapse", vim.tbl_count(picked) == 2)
+end
+
+-------------------------------------------------------------------
+-- Test 19: <leader>ks is mapped in kotlin buffers
+-------------------------------------------------------------------
+do
+    open("Main.kt")
+    check("sources: <leader>ks mapped", vim.fn.maparg("<leader>ks", "n", "", true).buffer == 1)
+end
+
+-------------------------------------------------------------------
 io.write("\n")
 if failures == 0 then
     io.write("All checks passed.\n")

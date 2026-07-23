@@ -22,6 +22,7 @@ local function specs()
         auto_import        = { actions.auto_import_under_cursor, "Auto-import (kotlin-lite)" },
         run_file           = { runner.run_file,                "Run file (kotlin-lite)" },
         run_project        = { runner.run_project,             "Run project (kotlin-lite)" },
+        sources            = { function() require("kotlin-lite.jars").pick_sources_jar() end, "Extract sources jar (kotlin-lite)" },
         find_files         = { actions.find_files,             "Find files (kotlin-lite)" },
     }
 end

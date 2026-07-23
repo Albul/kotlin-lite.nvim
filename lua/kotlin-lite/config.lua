@@ -37,6 +37,23 @@ M.defaults = {
     intellij_keymaps = false,
     -- optional snacks.nvim explorer integration (compact middle packages etc.)
     snacks_integration = true,
+    -- on startup, quietly extract the newest cached sources for common libs
+    auto_extract = true,
+    essentials = {
+        kotlin = {
+            "kotlin-stdlib", "kotlin-reflect",
+            "kotlinx-coroutines-core", "kotlinx-coroutines-core-jvm",
+            "kotlinx-serialization-core", "kotlinx-serialization-json",
+        },
+        -- androidx module names (only used when an Android project is detected)
+        android = {
+            "core", "core-ktx", "appcompat",
+            "activity", "activity-ktx", "activity-compose",
+            "fragment", "fragment-ktx",
+            "lifecycle-runtime-ktx", "lifecycle-viewmodel-ktx",
+            "material",
+        },
+    },
     -- `run_file` / `run_project` terminal split
     run = {
         height = 15,
@@ -61,6 +78,7 @@ M.defaults = {
         auto_import        = "<leader>ki",
         run_file           = "<leader>kr",
         run_project        = "<leader>kR",
+        sources            = "<leader>ks",
         find_files         = "<leader><leader>",
     },
 }

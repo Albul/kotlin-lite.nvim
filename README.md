@@ -28,9 +28,14 @@ or unavailable, and for reading library sources extracted from `*-sources.jar`.
 
 Commands:
 
-- `:KotlinSources` — find a `*-sources.jar` under `~/.gradle` / `~/.m2` and
-  extract it so navigation can reach into library sources.
+- `:KotlinSources` (`<leader>ks`) — pick a `*-sources.jar` from `~/.gradle` /
+  `~/.m2` to extract so navigation reaches into library sources. Only the newest
+  version of each artifact is listed, extracted ones first.
 - `:KotlinSourcesClear` — clear the extracted jar cache.
+
+On startup the newest cached sources for common libraries (kotlin stdlib,
+coroutines, serialization; androidx essentials in Android projects) are extracted
+in the background — disable with `auto_extract = false`.
 
 ## Requirements
 
@@ -71,6 +76,8 @@ require("kotlin-lite").setup({
     symbols = { icons = { --[[ class/interface/object/companion/fun/field ]] } },
     intellij_keymaps = false,               -- register IntelliJ maps in addition to the vim ones
     snacks_integration = true,              -- optional snacks.nvim explorer (see below)
+    auto_extract = true,                    -- extract essential library sources on startup
+    -- essentials = { kotlin = {...}, android = {...} }, -- artifact names to auto-extract
     run = {
         height = 15,                        -- bottom terminal split height
         main_property = "mainClass",        -- gradle -P property for run_file (see Runners)
@@ -91,6 +98,7 @@ require("kotlin-lite").setup({
         auto_import        = "<leader>ki",
         run_file           = "<leader>kr",
         run_project        = "<leader>kR",
+        sources            = "<leader>ks",
         find_files         = "<leader><leader>",
     },
 })
