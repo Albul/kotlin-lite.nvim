@@ -76,6 +76,12 @@ M.defaults = {
         -- gradle project property carrying the main class for `run_file`
         main_property = "mainClass",
     },
+    -- `test_file` / `test_project`
+    test = {
+        task = nil,      -- override the gradle test task (auto: test / testDebugUnitTest)
+        rerun = true,    -- prepend cleanTest so results & per-test output always refresh
+        quickfix = true, -- list failed tests in the quickfix panel
+    },
     -- lhs per action; a string or a list, false to disable
     -- The gr*/gO aliases shadow Neovim's default LSP maps in kotlin buffers only.
     keymaps = {
@@ -94,6 +100,8 @@ M.defaults = {
         auto_import        = { "<leader>ki", "gra" }, -- gra (code_action) alias
         run_file           = "<leader>kr",
         run_project        = "<leader>kR",
+        test_file          = "<leader>kt",
+        test_project       = "<leader>kT",
         sources            = "<leader>ks",
         toggle_compact     = "<leader>km", -- snacks explorer; registered globally
         find_files         = "<leader><leader>",

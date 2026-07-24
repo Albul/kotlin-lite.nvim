@@ -17,19 +17,19 @@ end
 function M.select(items, opts, on_choice)
     local Snacks = snacks()
     if Snacks then
-        local ok = pcall(function()
-            Snacks.picker.pick({
-                title = opts.prompt,
-                items = items,
-                format = function(item) return { { item.display or item.text } } end,
-                matcher = { smartcase = false, ignorecase = true },
-                confirm = function(picker, item)
-                    picker:close()
-                    if item then on_choice(item.data) end
-                end,
-            })
-        end)
-        if ok then return end
+        local pick_opts = {
+            title = opts.prompt,
+            items = items,
+            format = function(item) return { { item.display or item.text } } end,
+            matcher = { smartcase = false, ignorecase = true },
+            confirm = function(picker, item)
+                picker:close()
+                if item then on_choice(item.data) end
+            end,
+        }
+        -- items without a `file` can't be previewed -> disable the preview pane
+        if not (items[1] and items[1].file) then pick_opts.preview = false end
+        if pcall(Snacks.picker.pick, pick_opts) then return end
     end
 
     vim.ui.select(items, {

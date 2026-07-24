@@ -25,6 +25,8 @@ or unavailable, and for reading library sources extracted from `*-sources.jar`.
 | `<leader>ki`          | Auto-import the symbol under the cursor (rg for the definition, picker if ambiguous) |
 | `<leader>kr`          | Run the current file (needs a top-level `main()`) in a bottom terminal split |
 | `<leader>kR`          | Run the project in a bottom terminal split                             |
+| `<leader>kt`          | Test the current file (`gradle test --tests <FQCN>`)                   |
+| `<leader>kT`          | Test the project (module picker if multi-module)                       |
 
 Commands:
 
@@ -166,16 +168,19 @@ property name via `run.main_property`.
 
 [snacks.nvim] is a **strictly optional** dependency — the plugin never requires
 it at load time and works fully without it. When `snacks_integration = true`
-(the default) it provides an IntelliJ-style explorer for Kotlin trees:
+(the default) it adds an IntelliJ-style explorer for Kotlin trees, with these
+keys in the explorer window:
 
-- **Compact middle packages** — `com/example/foo/bar` collapses to
-  `com.example.foo.bar` like IntelliJ (toggle with `<leader>km`).
-- **Kotlin-aware "add file"** (`a`) — seeds `package` + `class` from the dir.
-- **Kotlin-aware rename** (`<leader>cR`) — renames the selected item and offers
-  the module-scoped entity rename; unavailable while several items are selected.
-- Recursive open/collapse (`zo`/`zO`/`zA`/`zR`), git stage (`<A-a>`), yank
-  file(s) to the system clipboard (`Y`) — cross-platform (macOS `osascript`,
-  Windows `Set-Clipboard`, Linux `wl-copy`/`xclip`/`xsel`).
+| Key           | Action                                                               |
+| ------------- | ------------------------------------------------------------------- |
+| `<leader>km`  | Toggle **compact middle packages** (`com/example/foo` → `com.example.foo`); also global |
+| `a`           | Add file/dir — Kotlin-aware, seeds `package` + `class` from the directory |
+| `<leader>cR`  | Kotlin-aware rename (offers the module-scoped entity rename; disabled for a multi-selection) |
+| `Y`           | Yank file(s) to the system clipboard (macOS `osascript`, Windows `Set-Clipboard`, Linux `wl-copy`/`xclip`/`xsel`) |
+| `zo` / `zO`   | Open directory (one level / recursively)                            |
+| `zA` / `zM`   | Toggle recursively / close all                                      |
+| `zR`          | Open all directories                                                |
+| `<A-a>`       | Git: add to index                                                   |
 
 Wire the explorer opts into your snacks config:
 
@@ -195,6 +200,18 @@ Wire the explorer opts into your snacks config:
 `<leader>ke` reveals the current file. If snacks is not installed it shows a
 polite warning; set `snacks_integration = false` to make it a silent no-op.
 
+### Testing
+
+`<leader>kt` / `<leader>kT` run gradle tests in a bottom terminal. A temporary
+`--init-script` (no project changes) forces per-test `PASSED`/`FAILED` logging
+and a total line; on finish a summary is notified and failed tests are parsed
+from the JUnit XML into the quickfix list. The task is inferred (no slow gradle
+query) from the test file's **source set** — `src/commonTest` or `src/jvmTest` →
+`jvmTest`, `src/test` → `test` — falling back to project structure (KMP →
+`jvmTest`, else `test`, which on Android covers all unit-test variants). Reruns
+are forced by clearing the module's `build/test-results` (no dependency on a
+`clean<Task>`). Override via `test = { task, rerun, quickfix }`.
+
 ## Layout
 
 ```
@@ -204,7 +221,7 @@ lua/kotlin-lite/
 ├── jars.lua      -- *-sources.jar discovery, extraction, read-only cache
 ├── search.lua    -- ripgrep + Kotlin decl patterns + in-buffer search
 ├── actions.lua   -- gd / K / gK / gr / rename / rename-file / structure / symbols / alternate / fqname / auto-import / format
-├── runner.lua    -- run_file / run_project (bottom terminal split)
+├── runner.lua    -- run + test (bottom terminal, gradle init-script, quickfix)
 ├── keymaps.lua   -- buffer-local + global keymap attachment
 ├── picker.lua    -- case-insensitive list picker (snacks, else vim.ui.select)
 └── snacks.lua    -- optional snacks.nvim explorer integration (loaded lazily)

@@ -22,6 +22,8 @@ local function specs()
         auto_import        = { actions.auto_import_under_cursor, "Auto-import (kotlin-lite)" },
         run_file           = { runner.run_file,                "Run file (kotlin-lite)" },
         run_project        = { runner.run_project,             "Run project (kotlin-lite)" },
+        test_file          = { runner.run_tests_file,          "Test file (kotlin-lite)" },
+        test_project       = { runner.run_tests_project,       "Test project (kotlin-lite)" },
         sources            = { function() require("kotlin-lite.jars").pick_sources_jar() end, "Extract sources jar (kotlin-lite)" },
         toggle_compact     = { function() require("kotlin-lite.snacks").toggle_compact() end, "Toggle compact packages (kotlin-lite)" },
         find_files         = { actions.find_files,             "Find files (kotlin-lite)" },
@@ -30,7 +32,7 @@ end
 
 -- project-level actions that are useful without a .kt buffer; registered
 -- globally (leader maps, so they don't shadow LSP defaults elsewhere)
-M.project_actions = { "run_project", "sources", "reveal_in_explorer" }
+M.project_actions = { "run_project", "test_project", "sources", "reveal_in_explorer" }
 -- registered globally too, but gated on snacks rather than a gradle root
 M.snacks_actions = { "toggle_compact" }
 -- never attached buffer-locally (only ever global)

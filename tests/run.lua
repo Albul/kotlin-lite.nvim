@@ -513,6 +513,79 @@ do
 end
 
 -------------------------------------------------------------------
+-- Test 25: gradle test command construction
+-------------------------------------------------------------------
+do
+    local runner = require("kotlin-lite.runner")
+    local cmd = runner.test_command(fixtures .. "/runner/gradle", { "test" }, "com.x.FooTest")
+    check("test: uses gradle wrapper", cmd:match("^%./gradlew ") ~= nil)
+    check("test: plain console", cmd:find("--console=plain", 1, true) ~= nil)
+    check("test: injects init script", cmd:find("--init-script", 1, true) ~= nil)
+    check("test: filters to the class", cmd:find("--tests", 1, true) ~= nil
+        and cmd:find("com.x.FooTest", 1, true) ~= nil)
+
+    local mcmd = runner.test_command(fixtures .. "/runner/gradle",
+        { ":app:test", ":core:data:jvmTest" }, nil)
+    check("test: multi-module specs joined", mcmd:find(":app:test :core:data:jvmTest", 1, true) ~= nil)
+
+    -- task detection: source set from the file path wins
+    check("test_task: src/commonTest file -> jvmTest",
+        runner.test_task(fixtures, "/x/core/data/src/commonTest/kotlin/FooTest.kt") == "jvmTest")
+    check("test_task: src/jvmTest file -> jvmTest",
+        runner.test_task(fixtures, "/x/m/src/jvmTest/kotlin/FooTest.kt") == "jvmTest")
+    check("test_task: src/test file -> test",
+        runner.test_task(fixtures, "/x/app/src/test/java/FooTest.java") == "test")
+    -- else fall back to module structure / build script
+    check("test_task: plain project -> test",
+        runner.test_task(fixtures .. "/runner/gradle") == "test")
+    check("test_task: KMP build script (case-insensitive) -> jvmTest",
+        runner.test_task(fixtures .. "/runner/kmp") == "jvmTest")
+end
+
+-------------------------------------------------------------------
+-- Test 26: settings.gradle module discovery
+-------------------------------------------------------------------
+do
+    local mods = require("kotlin-lite.runner").modules(fixtures .. "/runner/multimodule")
+    local set = {}
+    for _, m in ipairs(mods) do set[m] = true end
+    check("modules: finds :app", set[":app"])
+    check("modules: finds :core", set[":core"])
+    check("modules: finds :feature:login", set[":feature:login"])
+    check("modules: does not pick rootProject.name", not set["demo"])
+
+    local runner = require("kotlin-lite.runner")
+    local mm = fixtures .. "/runner/multimodule"
+    check("module_of: file in app/ -> :app",
+        runner.module_of(mm, mm .. "/app/src/test/kotlin/FooTest.kt") == ":app")
+    check("module_of: file in root project -> nil",
+        runner.module_of(mm, mm .. "/FooTest.kt") == nil)
+end
+
+-------------------------------------------------------------------
+-- Test 27: JUnit XML failures -> quickfix items
+-------------------------------------------------------------------
+do
+    local items = require("kotlin-lite.runner").parse_failures(fixtures .. "/testresults", nil)
+    check("failures: exactly one failed testcase", #items == 1)
+    local it = items[1] or {}
+    check("failures: names the failed test", (it.text or ""):find("fixtures.SampleTest.fails", 1, true) ~= nil)
+    check("failures: unescapes the message", (it.text or ""):find("expected:<1> but was:<2>", 1, true) ~= nil)
+    check("failures: keeps the source line", it.lnum == 12 or (it.text or ""):find("SampleTest.kt", 1, true) ~= nil)
+end
+
+-------------------------------------------------------------------
+-- Test 28: test keymaps (kt-local <leader>kt, global <leader>kT)
+-------------------------------------------------------------------
+do
+    open("Main.kt")
+    check("test: <leader>kt buffer-local in kotlin",
+        vim.fn.maparg("<leader>kt", "n", "", true).buffer == 1)
+    check("test: test_project is a project global action",
+        vim.tbl_contains(require("kotlin-lite.keymaps").project_actions, "test_project"))
+end
+
+-------------------------------------------------------------------
 io.write("\n")
 if failures == 0 then
     io.write("All checks passed.\n")

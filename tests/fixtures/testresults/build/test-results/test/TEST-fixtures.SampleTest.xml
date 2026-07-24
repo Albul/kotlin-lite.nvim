@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="fixtures.SampleTest" tests="2" skipped="0" failures="1" errors="0">
+  <testcase name="passes" classname="fixtures.SampleTest" time="0.01"/>
+  <testcase name="fails" classname="fixtures.SampleTest" time="0.02">
+    <failure message="expected:&lt;1&gt; but was:&lt;2&gt;" type="org.opentest4j.AssertionFailedError">org.opentest4j.AssertionFailedError: expected:&lt;1&gt; but was:&lt;2&gt;
+	at fixtures.SampleTest.fails(SampleTest.kt:12)
+</failure>
+  </testcase>
+</testsuite>
