@@ -33,6 +33,9 @@ M.defaults = {
             field     = u(0xeb5f), --
         },
     },
+    -- in a gradle project, expose the `<leader>k` menu (run/sources/explorer/…)
+    -- in every buffer, not only kotlin files
+    project_keymaps = true,
     -- also register IntelliJ-style keymaps on top of the vim ones
     intellij_keymaps = false,
     -- optional snacks.nvim explorer integration (compact middle packages etc.)
@@ -40,18 +43,31 @@ M.defaults = {
     -- on startup, quietly extract the newest cached sources for common libs
     auto_extract = true,
     essentials = {
+        -- always considered
         kotlin = {
             "kotlin-stdlib", "kotlin-reflect",
             "kotlinx-coroutines-core", "kotlinx-coroutines-core-jvm",
             "kotlinx-serialization-core", "kotlinx-serialization-json",
         },
-        -- androidx module names (only used when an Android project is detected)
+        test = {
+            "junit", "kotlin-test", "kotlin-test-junit",
+            "kotlinx-coroutines-test", "turbine",
+            "mockk", "mockito-core", "mockito-kotlin",
+            "truth", "assertj-core", "robolectric",
+        },
+        -- only when an Android project is detected
         android = {
             "core", "core-ktx", "appcompat",
             "activity", "activity-ktx", "activity-compose",
             "fragment", "fragment-ktx",
             "lifecycle-runtime-ktx", "lifecycle-viewmodel-ktx",
             "material",
+        },
+        compose = {
+            "ui", "ui-graphics", "ui-text", "ui-unit", "ui-tooling-preview",
+            "foundation", "foundation-layout",
+            "material3", "material-icons-core",
+            "runtime", "animation", "navigation-compose",
         },
     },
     -- `run_file` / `run_project` terminal split
@@ -61,24 +77,25 @@ M.defaults = {
         main_property = "mainClass",
     },
     -- lhs per action; a string or a list, false to disable
+    -- The gr*/gO aliases shadow Neovim's default LSP maps in kotlin buffers only.
     keymaps = {
-        goto_definition    = "gd",
+        goto_definition    = { "gd", "grt" },  -- grt (type_definition) alias
         hover              = "K",
         signature_help     = "gK",
-        -- gu + grr (grr shadows nvim's LSP references map in kotlin buffers only)
-        find_usages        = { "gu", "grr" },
-        rename             = "<leader>cr",
+        find_usages        = { "gu", "grr" },  -- grr (references) alias
+        rename             = { "<leader>cr", "grn" }, -- grn (rename) alias
         rename_file        = "<leader>cR",
         format             = "<leader>cf",
-        file_structure     = "<leader>cs",
+        file_structure     = { "<leader>cs", "gO" }, -- gO (document_symbol) alias
         project_symbols    = "<leader>cS",
         reveal_in_explorer = "<leader>ke",
         alternate_file     = "<leader>ka",
         copy_fqname        = "<leader>kc",
-        auto_import        = "<leader>ki",
+        auto_import        = { "<leader>ki", "gra" }, -- gra (code_action) alias
         run_file           = "<leader>kr",
         run_project        = "<leader>kR",
         sources            = "<leader>ks",
+        toggle_compact     = "<leader>km", -- snacks explorer; registered globally
         find_files         = "<leader><leader>",
     },
 }

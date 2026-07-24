@@ -15,8 +15,8 @@ or unavailable, and for reading library sources extracted from `*-sources.jar`.
 | `gu` / `grr`          | Find usages → quickfix panel at the bottom                             |
 | `<leader>cr`          | Rename symbol: project-wide word search & replace with confirmation    |
 | `<leader>cR`          | Rename file; for a same-named top-level `class`/`interface`/`object`/`fun` it offers a module-scoped symbol rename |
-| `<leader>cs`          | File structure outline — top-level decls, class members & public fields, with kind icons (IntelliJ `Ctrl+F12`) |
-| `<leader>cS`          | Go to symbol in project (IntelliJ `Ctrl+N`)                            |
+| `<leader>cs`          | File structure outline — top-level decls & class members (incl. private/protected/internal, marked with a UML sigil), with kind icons (IntelliJ `Ctrl+F12`) |
+| `<leader>cS`          | Go to symbol — live-search picker over top-level classes/objects/interfaces/enums & functions (IntelliJ `Ctrl+N`) |
 | `<leader><leader>`    | Go to file (Telescope / snacks, best-effort)                           |
 | `<leader>ke`          | Reveal current file in the [snacks.nvim] explorer (IntelliJ `Alt+F1`)  |
 | `<leader>ka`          | Alternate file: `X.kt` ⇄ `XTest.kt` — searches the module for the `Test`-suffixed counterpart wherever it lives, and offers to scaffold it if absent |
@@ -34,8 +34,9 @@ Commands:
 - `:KotlinSourcesClear` — clear the extracted jar cache.
 
 On startup the newest cached sources for common libraries (kotlin stdlib,
-coroutines, serialization; androidx essentials in Android projects) are extracted
-in the background — disable with `auto_extract = false`.
+coroutines, serialization, test libs; androidx + Compose in Android projects) are
+extracted in the background — customize via `essentials`, disable with
+`auto_extract = false`.
 
 ## Requirements
 
@@ -53,7 +54,9 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
 ```lua
 {
     "olekdia/kotlin-lite.nvim", -- or a local `dir = "..."`
-    ft = { "kotlin" },
+    -- Load eagerly so the `<leader>k` project menu works before you open a .kt
+    -- file. Use `ft = { "kotlin" }` instead if you don't need that.
+    event = "VeryLazy",
     opts = {}, -- calls require("kotlin-lite").setup(opts)
 }
 ```
@@ -77,6 +80,7 @@ require("kotlin-lite").setup({
     intellij_keymaps = false,               -- register IntelliJ maps in addition to the vim ones
     snacks_integration = true,              -- optional snacks.nvim explorer (see below)
     auto_extract = true,                    -- extract essential library sources on startup
+    project_keymaps = true,                 -- expose project-level maps globally in a gradle project
     -- essentials = { kotlin = {...}, android = {...} }, -- artifact names to auto-extract
     run = {
         height = 15,                        -- bottom terminal split height
@@ -99,17 +103,23 @@ require("kotlin-lite").setup({
         run_file           = "<leader>kr",
         run_project        = "<leader>kR",
         sources            = "<leader>ks",
+        toggle_compact     = "<leader>km",
         find_files         = "<leader><leader>",
     },
 })
 ```
 
 Set any keymap to `false` to disable it. Each value may be a single lhs or a
-list of them. All maps are buffer-local to kotlin filetypes, so your normal LSP
-maps (including `grr`) are untouched in other buffers. `<leader>cf` formats the
-whole buffer via `formatprg`; `=` stays native unless `format_on_equal = true`.
-Outline icons are nerd-font codicons — override `symbols.icons` with plain text
-if you don't use a nerd font.
+list of them. Most maps are buffer-local to kotlin filetypes, so your normal LSP
+maps (including `grr`) are untouched elsewhere. The exceptions are registered
+globally so they work without a `.kt` buffer (and inside the snacks explorer):
+`<leader>kR` / `<leader>ks` / `<leader>ke` in a gradle project
+(`project_keymaps = false` to opt out), and `<leader>km` (compact packages)
+whenever snacks is integrated. `<leader>cf` formats the whole buffer via
+`formatprg`; `=` stays native unless `format_on_equal = true`. Outline icons are
+nerd-font codicons — override `symbols.icons` with plain text if you don't use a
+nerd font. Live search in the `<leader>cs`/`<leader>cS` pickers is
+case-insensitive.
 
 ### IntelliJ keymaps
 
@@ -195,7 +205,8 @@ lua/kotlin-lite/
 ├── search.lua    -- ripgrep + Kotlin decl patterns + in-buffer search
 ├── actions.lua   -- gd / K / gK / gr / rename / rename-file / structure / symbols / alternate / fqname / auto-import / format
 ├── runner.lua    -- run_file / run_project (bottom terminal split)
-├── keymaps.lua   -- buffer-local keymap attachment
+├── keymaps.lua   -- buffer-local + global keymap attachment
+├── picker.lua    -- case-insensitive list picker (snacks, else vim.ui.select)
 └── snacks.lua    -- optional snacks.nvim explorer integration (loaded lazily)
 plugin/kotlin-lite.lua  -- startup bootstrap
 tests/                  -- fixtures + interactive harness + headless checks

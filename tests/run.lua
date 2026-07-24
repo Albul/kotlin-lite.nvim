@@ -322,21 +322,27 @@ end
 do
     open("Structure.kt")
     local items = actions._scan_symbols(vim.api.nvim_buf_get_lines(0, 0, -1, false))
-    local kind = {}
-    for _, it in ipairs(items) do kind[it.name] = it.kind end
+    local kind, vis = {}, {}
+    for _, it in ipairs(items) do kind[it.name], vis[it.name] = it.kind, it.vis end
 
-    local shown = { "TOP_CONST", "topVar", "topLevel", "Shape", "perimeter", "Point",
-        "x", "visible", "mutable", "distance", "ORIGIN" }
+    -- main hierarchy is shown regardless of visibility (private/protected too)
+    local shown = { "TOP_CONST", "topVar", "topLevel", "hiddenFun", "Shape", "perimeter",
+        "Point", "x", "secret", "visible", "hiddenField", "mutable", "distance", "ORIGIN" }
     for _, n in ipairs(shown) do
         check("outline: shows " .. n, kind[n] ~= nil)
     end
-    local hidden = { "localOnly", "hiddenFun", "secret", "z", "hiddenField", "tmp" }
-    for _, n in ipairs(hidden) do
+    -- but function locals and non-property params stay out
+    for _, n in ipairs({ "localOnly", "tmp", "z" }) do
         check("outline: hides " .. n, kind[n] == nil)
     end
     check("outline: Point is a class", kind["Point"] == "class")
     check("outline: perimeter is a fun", kind["perimeter"] == "fun")
     check("outline: x is a field (ctor prop)", kind["x"] == "field")
+    -- visibility recorded for the fade sigil
+    check("outline: secret is private", vis["secret"] == "private")
+    check("outline: hiddenField is private", vis["hiddenField"] == "private")
+    check("outline: hiddenFun is private", vis["hiddenFun"] == "private")
+    check("outline: visible is public", vis["visible"] == "public")
 end
 
 -------------------------------------------------------------------
@@ -362,9 +368,10 @@ do
         check("cycle: shows " .. n, kind[n] ~= nil)
     end
     check("cycle: getPhaseMillis is a fun", kind["getPhaseMillis"] == "fun")
-    -- private members and secondary-constructor params stay hidden
-    check("cycle: hides private convertToActualUnits", kind["convertToActualUnits"] == nil)
-    check("cycle: hides private unitToMillis", kind["unitToMillis"] == nil)
+    -- private members are now shown (with a visibility sigil); secondary-ctor
+    -- params (no val/var) still stay out
+    check("cycle: shows private convertToActualUnits", kind["convertToActualUnits"] == "fun")
+    check("cycle: shows private unitToMillis", kind["unitToMillis"] == "fun")
     check("cycle: top-level const shown", kind["PHASE_MILLIS_FACTOR"] == "field")
     check("cycle: companion shown", kind["asConstantPhase"] ~= nil)
 end
@@ -404,6 +411,105 @@ end
 do
     open("Main.kt")
     check("sources: <leader>ks mapped", vim.fn.maparg("<leader>ks", "n", "", true).buffer == 1)
+end
+
+-------------------------------------------------------------------
+-- Test 20: project_symbols is a single picker over TOP-LEVEL symbols only
+-------------------------------------------------------------------
+do
+    local captured
+    local orig = vim.ui.select
+    vim.ui.select = function(list) captured = list end -- capture, don't invoke cb
+
+    open("Main.kt") -- cwd is the fixtures dir -> rg scans all fixtures
+    actions.project_symbols()
+    vim.wait(4000, function() return captured ~= nil end, 40)
+    vim.ui.select = orig
+
+    local kind = {}
+    for _, s in ipairs(captured or {}) do kind[s.data.name] = s.data.kind end
+
+    for _, n in ipairs({ "Circle", "Shape", "Point", "CyclePhase", "CycleType",
+        "CycleEntry", "topLevel", "main", "describe" }) do
+        check("symbols: includes top-level " .. n, kind[n] ~= nil)
+    end
+    check("symbols: enum CyclePhase is a class kind", kind["CyclePhase"] == "class")
+    check("symbols: object CycleType is object kind", kind["CycleType"] == "object")
+    -- nested members and fields must NOT appear
+    for _, n in ipairs({ "perimeter", "distance", "isReposeCycle", "asConstantPhase",
+        "TOP_CONST", "inhaleUnit" }) do
+        check("symbols: excludes nested/field " .. n, kind[n] == nil)
+    end
+end
+
+-------------------------------------------------------------------
+-- Test 21: auto-extract essential set includes test libs; compose is Android-only
+-------------------------------------------------------------------
+do
+    local e = require("kotlin-lite.config").options.essentials
+    local function has(list, v)
+        for _, x in ipairs(list) do if x == v then return true end end
+        return false
+    end
+    check("essentials: kotlin has stdlib", has(e.kotlin, "kotlin-stdlib"))
+    check("essentials: test has junit + kotlin-test", has(e.test, "junit") and has(e.test, "kotlin-test"))
+    check("essentials: compose has material3 + ui", has(e.compose, "material3") and has(e.compose, "ui"))
+end
+
+-------------------------------------------------------------------
+-- Test 22: attach_globals exposes only the <leader>k menu (global, not buffer)
+-------------------------------------------------------------------
+do
+    -- observe from a non-kotlin buffer so buffer-local maps don't shadow globals
+    vim.cmd("enew")
+    vim.bo.filetype = "lua"
+    local km = require("kotlin-lite.keymaps")
+    km.attach_globals(km.project_actions) -- simulate being in a gradle project
+
+    local function g(l)
+        local m = vim.fn.maparg(l, "n", "", true)
+        return next(m) ~= nil and m.buffer == 0
+    end
+    -- project-level menu is global
+    check("globals: <leader>ks (sources) global", g("<leader>ks"))
+    check("globals: <leader>kR (run_project) global", g("<leader>kR"))
+    check("globals: <leader>ke (reveal) global", g("<leader>ke"))
+    -- snacks compact toggle was registered globally at init (snacks_integration)
+    check("globals: <leader>km (toggle_compact) global", g("<leader>km"))
+    -- kt-specific & navigation maps must NOT be global
+    check("globals: <leader>kr (run_file) NOT global", vim.fn.maparg("<leader>kr", "n") == "")
+    check("globals: <leader>ka (alternate) NOT global", vim.fn.maparg("<leader>ka", "n") == "")
+    check("globals: gd NOT global", vim.fn.maparg("gd", "n") == "")
+    check("globals: <leader>cs NOT global", vim.fn.maparg("<leader>cs", "n") == "")
+
+    for _, l in ipairs({ "<leader>ks", "<leader>kR", "<leader>ke" }) do
+        pcall(vim.keymap.del, "n", l)
+    end
+    vim.cmd("bwipeout!")
+end
+
+-------------------------------------------------------------------
+-- Test 23: gr*/gO aliases are buffer-local in kotlin buffers
+-------------------------------------------------------------------
+do
+    open("Main.kt")
+    local function bl(l) return vim.fn.maparg(l, "n", "", true).buffer == 1 end
+    check("alias: grn -> rename", bl("grn"))
+    check("alias: grt -> definition", bl("grt"))
+    check("alias: gra -> auto-import", bl("gra"))
+    check("alias: gO -> file structure", bl("gO"))
+    check("alias: grr -> usages", bl("grr"))
+end
+
+-------------------------------------------------------------------
+-- Test 24: project globals attach on entering a gradle-project file
+-------------------------------------------------------------------
+do
+    pcall(vim.keymap.del, "n", "<leader>kR") -- ensure a clean starting point
+    vim.cmd("edit " .. vim.fn.fnameescape(fixtures .. "/runner/gradle/build.gradle.kts"))
+    vim.wait(500, function() return vim.fn.maparg("<leader>kR", "n") ~= "" end, 20)
+    check("project: entering a gradle file attaches <leader>kR globally",
+        vim.fn.maparg("<leader>kR", "n") ~= "")
 end
 
 -------------------------------------------------------------------

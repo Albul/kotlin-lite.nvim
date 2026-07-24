@@ -23,8 +23,31 @@ local function specs()
         run_file           = { runner.run_file,                "Run file (kotlin-lite)" },
         run_project        = { runner.run_project,             "Run project (kotlin-lite)" },
         sources            = { function() require("kotlin-lite.jars").pick_sources_jar() end, "Extract sources jar (kotlin-lite)" },
+        toggle_compact     = { function() require("kotlin-lite.snacks").toggle_compact() end, "Toggle compact packages (kotlin-lite)" },
         find_files         = { actions.find_files,             "Find files (kotlin-lite)" },
     }
+end
+
+-- project-level actions that are useful without a .kt buffer; registered
+-- globally (leader maps, so they don't shadow LSP defaults elsewhere)
+M.project_actions = { "run_project", "sources", "reveal_in_explorer" }
+-- registered globally too, but gated on snacks rather than a gradle root
+M.snacks_actions = { "toggle_compact" }
+-- never attached buffer-locally (only ever global)
+local GLOBAL_ONLY = { toggle_compact = true }
+
+--- Register the given action names as global (not buffer-local) normal maps.
+function M.attach_globals(names)
+    local keymaps = require("kotlin-lite.config").options.keymaps
+    local handlers = specs()
+    for _, name in ipairs(names) do
+        local lhs, spec = keymaps[name], handlers[name]
+        if lhs and spec then
+            for _, l in ipairs(type(lhs) == "table" and lhs or { lhs }) do
+                vim.keymap.set("n", l, spec[1], { silent = true, desc = spec[2] })
+            end
+        end
+    end
 end
 
 function M.attach(buf)
@@ -44,7 +67,7 @@ function M.attach(buf)
 
     for name, lhs in pairs(opts.keymaps) do
         local spec = handlers[name]
-        if spec and lhs then
+        if spec and lhs and not GLOBAL_ONLY[name] then
             local list = type(lhs) == "table" and lhs or { lhs }
             for _, l in ipairs(list) do
                 map(l, spec[1], spec[2])

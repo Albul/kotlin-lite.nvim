@@ -32,6 +32,44 @@ function M.init()
     require("kotlin-lite.jars").setup()
     register()
 
+    -- Expose a small set of maps globally (not just in .kt buffers):
+    --   * project actions (run / sources / reveal) in a gradle project
+    --   * the snacks compact-packages toggle whenever snacks is integrated
+    local opts = require("kotlin-lite.config").options
+    local keymaps = require("kotlin-lite.keymaps")
+
+    if opts.snacks_integration then
+        keymaps.attach_globals(keymaps.snacks_actions)
+    end
+
+    -- Detect the gradle project from the current file (or cwd), retrying on
+    -- BufEnter until found -- the file that reveals the project may be java, a
+    -- build script, etc., not necessarily where nvim was started.
+    if opts.project_keymaps then
+        local markers = { "gradlew", "settings.gradle.kts", "settings.gradle",
+            "build.gradle.kts", "build.gradle" }
+        local attached = false
+        local function try()
+            if attached then return true end
+            local name = vim.api.nvim_buf_get_name(0)
+            local from = (name ~= "" and name) or vim.fn.getcwd()
+            if vim.fs.root(from, markers) then
+                keymaps.attach_globals(keymaps.project_actions)
+                attached = true
+            end
+            return attached
+        end
+        if not try() then
+            local grp = vim.api.nvim_create_augroup("kotlin-lite-project", { clear = true })
+            vim.api.nvim_create_autocmd("BufEnter", {
+                group = grp,
+                callback = function()
+                    if try() then vim.api.nvim_del_augroup_by_id(grp) end
+                end,
+            })
+        end
+    end
+
     -- deferred so startup isn't blocked (the find + unzip are async anyway)
     vim.schedule(function() require("kotlin-lite.jars").auto_extract() end)
 

@@ -326,8 +326,11 @@ local function split_modifiers(s)
     return mods, s
 end
 
-local function hidden(mods)
-    return mods.private or mods.protected or false
+local function visibility(mods)
+    if mods.private then return "private" end
+    if mods.protected then return "protected" end
+    if mods.internal then return "internal" end
+    return "public"
 end
 
 -- inside of the first balanced (...) in `text`, or nil
@@ -364,36 +367,36 @@ end
 local function detect_decl(raw)
     local s = raw:gsub("^%s+", ""):gsub("^@[%w_.]+%s*", "")
     local mods, rest = split_modifiers(s)
-    local hide = hidden(mods)
+    local vis = visibility(mods)
 
     if mods.companion and rest:match("^object%f[%W]") then
         return { kind = "companion", name = rest:match("^object%s+([%w_]+)") or "companion",
-            hide = hide, opens_type = true, member_ok = true }
+            vis = vis, opens_type = true, member_ok = true }
     end
     if rest:match("^fun%s+interface%f[%W]") then
         return { kind = "interface", name = rest:match("^fun%s+interface%s+([%w_]+)"),
-            hide = hide, opens_type = true, top_ok = true, member_ok = true }
+            vis = vis, opens_type = true, top_ok = true, member_ok = true }
     end
 
     local kw = rest:match("^(%a+)%f[%W]")
     if kw == "class" or kw == "interface" or kw == "object" then
         return { kind = kw, name = rest:match("^%a+%s+([%w_]+)"),
-            hide = hide, opens_type = true, top_ok = true, member_ok = true }
+            vis = vis, opens_type = true, top_ok = true, member_ok = true }
     elseif kw == "fun" then
         return { kind = "fun", name = rest:match("([%w_]+)%s*%("),
-            hide = hide, top_ok = true, member_ok = true }
+            vis = vis, top_ok = true, member_ok = true }
     elseif kw == "val" or kw == "var" then
         local body = rest:gsub("^va[lr]%s+", ""):gsub("^<[^>]*>%s*", "")
         local name = body:match("^([%w_]+)%s*[:=]")
             or body:match("^([%w_]+)%s+by%f[%W]")
             or body:match("([%w_]+)%s*[:=]")
             or body:match("^([%w_]+)")
-        return { kind = "field", name = name, hide = hide, top_ok = true, member_ok = true }
+        return { kind = "field", name = name, vis = vis, top_ok = true, member_ok = true }
     end
     return nil
 end
 
--- public val/var properties declared in a class's primary constructor
+-- val/var properties declared in a class's primary constructor (with visibility)
 local function ctor_props(lines, start_lnum)
     local code, depth, started, endl = {}, 0, false, start_lnum
     for i = start_lnum, math.min(#lines, start_lnum + 30) do
@@ -413,7 +416,7 @@ local function ctor_props(lines, start_lnum)
     for _, p in ipairs(split_params(inside)) do
         local ps = p:gsub("^%s+", ""):gsub("^@[%w_.]+%s*", "")
         local mods, rest = split_modifiers(ps)
-        if rest:match("^va[lr]%f[%W]") and not hidden(mods) then
+        if rest:match("^va[lr]%f[%W]") then
             local nm = rest:match("^va[lr]%s+([%w_]+)")
             if nm then
                 local lnum, col = start_lnum, 0
@@ -421,7 +424,7 @@ local function ctor_props(lines, start_lnum)
                     local idx = lines[i]:find("%f[%w]" .. nm .. "%f[%W]")
                     if idx then lnum, col = i, idx - 1; break end
                 end
-                out[#out + 1] = { name = nm, lnum = lnum, col = col }
+                out[#out + 1] = { name = nm, lnum = lnum, col = col, vis = visibility(mods) }
             end
         end
     end
@@ -450,17 +453,17 @@ local function scan_symbols(lines)
             if decl and decl.name then
                 local scope = scopes[#scopes]
                 local show = (scope == nil and decl.top_ok) or (scope == "type" and decl.member_ok)
-                if show and not decl.hide then
+                if show then
                     items[#items + 1] = {
                         lnum = lnum, col = (raw:find(decl.name, 1, true) or 1) - 1,
-                        kind = decl.kind, name = decl.name, depth = type_depth(),
+                        kind = decl.kind, name = decl.name, vis = decl.vis, depth = type_depth(),
                     }
                 end
-                if decl.kind == "class" and (scope == nil or scope == "type") and not decl.hide then
+                if decl.kind == "class" and (scope == nil or scope == "type") then
                     local d = type_depth() + 1
                     for _, pr in ipairs(ctor_props(lines, lnum)) do
                         items[#items + 1] = { lnum = pr.lnum, col = pr.col, kind = "field",
-                            name = pr.name, depth = d }
+                            name = pr.name, vis = pr.vis, depth = d }
                     end
                 end
                 pending = decl.opens_type and "type" or "block"
@@ -497,44 +500,72 @@ function M.file_structure()
         return
     end
     local icons = cfg().symbols.icons
-    vim.ui.select(items, {
-        prompt = "File structure",
-        format_item = function(it)
-            return (icons[it.kind] or icons.field) .. "  "
-                .. string.rep("  ", it.depth or 0) .. it.name
-        end,
-    }, function(choice)
-        if choice then
-            vim.cmd("normal! m'")
-            vim.api.nvim_win_set_cursor(0, { choice.lnum, choice.col })
-            vim.cmd("normal! zvzz")
-        end
+    -- UML-style visibility sigil (private -, protected #, internal ~); public is
+    -- left blank -- the "fade" cue, since the picker rows can't be coloured.
+    local sigil = { private = "-", protected = "#", internal = "~" }
+    local fname = vim.api.nvim_buf_get_name(buf)
+    local picks = {}
+    for _, it in ipairs(items) do
+        picks[#picks + 1] = {
+            text = it.name, -- searched case-insensitively
+            display = (icons[it.kind] or icons.field) .. " " .. (sigil[it.vis] or " ") .. " "
+                .. string.rep("  ", it.depth or 0) .. it.name,
+            data = it, file = fname, lnum = it.lnum, col = it.col, pos = { it.lnum, it.col },
+        }
+    end
+    require("kotlin-lite.picker").select(picks, { prompt = "File structure" }, function(it)
+        vim.cmd("normal! m'")
+        vim.api.nvim_win_set_cursor(0, { it.lnum, it.col })
+        vim.cmd("normal! zvzz")
     end)
 end
 
+-- rg args matching top-level (column 0) type & function declarations
+local function toplevel_decl_args()
+    local mod = [=[(?:public|private|protected|internal|open|final|abstract|sealed|]=]
+        .. [=[data|enum|annotation|inner|value|companion|expect|actual|external)\s+]=]
+    return {
+        "-e", [=[^(?:]=] .. mod .. [=[)*(?:fun\s+)?(?:class|interface|object)\s+\w]=],
+        "-e", [=[^(?:]=] .. mod .. [=[)*fun\s+(?:<[^>]*>\s*)?(?:[\w.<>?, ]+\.)?\w+\s*[(<]]=],
+    }
+end
+
+-- IntelliJ Ctrl+N: one dialog, live search over top-level classes/interfaces/
+-- objects/enums and top-level functions in the project.
 function M.project_symbols()
-    vim.ui.input({ prompt = "Symbol: " }, function(query)
-        if not query or query == "" then return end
-        if not query:match("^[%w_]+$") then
-            vim.notify("kotlin-lite: only [A-Za-z0-9_] is supported in symbol search", vim.log.levels.WARN)
+    local wanted = { class = true, interface = true, object = true, ["fun"] = true }
+    search.rg(toplevel_decl_args(), { search.root() }, function(items)
+        local syms = {}
+        for _, it in ipairs(items) do
+            local decl = detect_decl(it.text)
+            if decl and decl.name and wanted[decl.kind] then
+                syms[#syms + 1] = {
+                    filename = it.filename, lnum = it.lnum,
+                    col = it.text:find(decl.name, 1, true) or 1,
+                    kind = decl.kind, name = decl.name,
+                }
+            end
+        end
+        if #syms == 0 then
+            vim.notify("kotlin-lite: no top-level symbols found", vim.log.levels.INFO)
             return
         end
-        local w = [=[\w*]=] .. query .. [=[\w*]=]
-        search.rg(search.decl_args(w), search.search_dirs(), function(items)
-            if #items == 0 then
-                vim.notify("kotlin-lite: no symbols match '" .. query .. "'", vim.log.levels.INFO)
-                return
-            end
-            if #items == 1 then
-                jump(items[1])
-                return
-            end
-            vim.ui.select(items, {
-                prompt = "Symbols: " .. query,
-                format_item = display,
-            }, function(choice)
-                if choice then jump(choice) end
-            end)
+        table.sort(syms, function(a, b)
+            if a.name ~= b.name then return a.name < b.name end
+            return a.filename < b.filename
+        end)
+        local icons = cfg().symbols.icons
+        local picks = {}
+        for _, s in ipairs(syms) do
+            picks[#picks + 1] = {
+                text = s.name, -- searched case-insensitively
+                display = (icons[s.kind] or icons.field) .. "  " .. s.name
+                    .. "   " .. vim.fn.fnamemodify(s.filename, ":."),
+                data = s, file = s.filename, lnum = s.lnum, col = s.col, pos = { s.lnum, s.col },
+            }
+        end
+        require("kotlin-lite.picker").select(picks, { prompt = "Project symbols" }, function(s)
+            jump(s)
         end)
     end)
 end

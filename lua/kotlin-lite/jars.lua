@@ -234,10 +234,14 @@ function M.auto_extract()
     local opts = cfg()
     if not opts.auto_extract then return end
 
-    local wanted = {}
-    for _, a in ipairs(opts.essentials.kotlin or {}) do wanted[a] = true end
+    local groups = { opts.essentials.kotlin, opts.essentials.test }
     if M.is_android_project() then
-        for _, a in ipairs(opts.essentials.android or {}) do wanted[a] = true end
+        table.insert(groups, opts.essentials.android)
+        table.insert(groups, opts.essentials.compose)
+    end
+    local wanted = {}
+    for _, g in ipairs(groups) do
+        for _, a in ipairs(g or {}) do wanted[a] = true end
     end
     if vim.tbl_isempty(wanted) then return end
 

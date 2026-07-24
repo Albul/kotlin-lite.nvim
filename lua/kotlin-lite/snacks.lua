@@ -522,4 +522,24 @@ function M.reveal()
     end
 end
 
+-------------------------------------------------------------------
+-- toggle compact middle packages from anywhere (<leader>km)
+-------------------------------------------------------------------
+function M.toggle_compact()
+    if not cfg().snacks_integration then return end
+    compact_enabled = not compact_enabled
+
+    -- refresh any open explorer so the change shows immediately
+    local ok, Snacks = pcall(require, "snacks")
+    if ok and Snacks.picker and Snacks.picker.get then
+        local got, pickers = pcall(Snacks.picker.get, { source = "explorer" })
+        if got and pickers then
+            for _, p in ipairs(pickers) do
+                pcall(function() require("snacks.explorer.actions").update(p, { refresh = true }) end)
+            end
+        end
+    end
+    vim.notify("Compact middle packages: " .. (compact_enabled and "on" or "off"), vim.log.levels.INFO)
+end
+
 return M
