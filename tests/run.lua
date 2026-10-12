@@ -698,6 +698,14 @@ do
     check("import: last segment", t and t.name == "Inner" and t.qualifier == "a.b.Foo")
     t = actions._import_target("import a.b.Foo.Inner", "Foo")
     check("import: middle segment", t and t.name == "Foo" and t.qualifier == "a.b")
+    t = actions._import_target("import a.b.Foo.Inner", "b")
+    check("import: package segment -> whole import", t and t.name == "Inner" and t.qualifier == "a.b.Foo")
+    t = actions._import_target("import a.b.Foo.Inner", "import")
+    check("import: keyword -> whole import", t and t.name == "Inner" and t.qualifier == "a.b.Foo")
+    t = actions._import_target("import a.b.foo", "b")
+    check("import: package segment of a fun import", t and t.name == "foo" and t.qualifier == "a.b")
+    t = actions._import_target("import a.b.*", "b")
+    check("import: wildcard", t and t.wildcard == "a.b")
     t = actions._import_target("import a.b.foo as bar", "bar")
     check("import: alias -> original name", t and t.name == "foo" and t.qualifier == "a.b")
     check("import: not an import line", actions._import_target("val x = a.b.Foo", "Foo") == nil)
@@ -722,6 +730,12 @@ do
     check("import gd: outer segment of nested import",
         gd_on("import defs.main.Outer.Inner", "Outer")
         and bufname():match("defs/imports/main/Dup%.kt$") and cur_line() == 5)
+    check("import gd: package segment -> imported class",
+        gd_on("import defs.other.Dup", "other") and not picked
+        and bufname():match("defs/imports/other/Dup%.kt$") and cur_line() == 3, bufname())
+    check("import gd: package segment of nested import -> innermost class",
+        gd_on("import defs.main.Outer.Inner", "main")
+        and bufname():match("defs/imports/main/Dup%.kt$") and cur_line() == 6)
     check("import gd: alias -> aliased top-level fun",
         gd_on("import defs.main.dupFun", "aliasFun") and not picked
         and bufname():match("defs/imports/main/Dup%.kt$") and cur_line() == 9)

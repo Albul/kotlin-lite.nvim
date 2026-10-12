@@ -56,22 +56,29 @@ end
 -- goto definition (gd)
 -------------------------------------------------------------------
 
--- `import a.b.Foo.Inner [as X]` with the cursor on a path segment or the alias
--- -> { name = decl to look up, qualifier = what precedes it ("a.b.Foo") }
+-- `import a.b.Foo.Inner [as X]` under the cursor -> { name = decl to look up,
+-- qualifier = what precedes it ("a.b.Foo") }. A class segment (Foo, Inner)
+-- targets itself; anywhere else on the line (keyword, package segment, alias)
+-- targets the imported decl. `import a.b.*` -> { wildcard = "a.b" }.
 local function import_target(line, word)
     local path, alias = line:match("^%s*import%s+([%w_.]+)%s+as%s+([%w_]+)")
     path = path or line:match("^%s*import%s+([%w_.]+)")
     if not path then return nil end
+    if path:sub(-1) == "." then return { wildcard = path:sub(1, -2) } end
     local segs = vim.split(path, ".", { plain = true })
-    if alias == word then
-        return { name = segs[#segs], qualifier = table.concat(segs, ".", 1, #segs - 1) }
+    local whole = { name = segs[#segs], qualifier = table.concat(segs, ".", 1, #segs - 1) }
+    if alias == word then return whole end
+    -- packages are lowercase by convention: class segments start at the first capital
+    local first = #segs
+    for i, seg in ipairs(segs) do
+        if seg:match("^%u") then first = i break end
     end
-    for i = #segs, 1, -1 do
+    for i = #segs, first, -1 do
         if segs[i] == word then
             return { name = word, qualifier = table.concat(segs, ".", 1, i - 1) }
         end
     end
-    return nil
+    return whole
 end
 M._import_target = import_target
 
@@ -95,6 +102,11 @@ function M.goto_definition()
 
     -- on an import line the FQ path pins the package: no in-buffer search, no guessing
     local imp = import_target(vim.api.nvim_get_current_line(), word)
+    if imp and imp.wildcard then
+        vim.notify("kotlin-lite: wildcard import of " .. imp.wildcard .. ", nothing to jump to",
+            vim.log.levels.INFO)
+        return
+    end
     if imp then word = imp.name
     elseif search.find_decl_in_buffer(word) then return end
 
