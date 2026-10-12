@@ -741,13 +741,109 @@ do
         and bufname():match("defs/imports/main/Dup%.kt$") and cur_line() == 9)
 
     -- unknown package: stays put, no fallback to a same-named class elsewhere
-    open(user)
+    open("defs/imports/user/Missing.kt")
     cursor_on(line_of("import defs.missing.Dup"), "Dup")
     actions.goto_definition()
-    vim.wait(600, function() return not bufname():match("User%.kt$") end, 20)
-    check("import gd: unknown package -> no jump", bufname():match("User%.kt$") ~= nil and not picked)
+    vim.wait(600, function() return not bufname():match("Missing%.kt$") end, 20)
+    check("import gd: unknown package -> no jump", bufname():match("Missing%.kt$") ~= nil and not picked)
 
     vim.ui.select = orig
+end
+
+-------------------------------------------------------------------
+-- Test 33: header parsing + rank (explicit > same package > star > default)
+-------------------------------------------------------------------
+do
+    local imports = require("kotlin-lite.imports")
+    local ctx = imports.parse({
+        "// header comment",
+        "@file:JvmName(\"X\")",
+        "package a.b",
+        "",
+        "import x.y.Foo",
+        "import x.y.Outer.Inner",
+        "import x.y.bar as baz",
+        "import w.z.*",
+        "",
+        "class Local",
+        "import not.a.Header", -- after the first declaration: ignored
+    })
+    check("header: package", ctx.package == "a.b")
+    check("header: explicit import", ctx.explicit.Foo == "x.y" and ctx.explicit.Inner == "x.y.Outer")
+    check("header: alias", ctx.aliases.baz and ctx.aliases.baz.name == "bar" and ctx.aliases.baz.qualifier == "x.y")
+    check("header: wildcard", ctx.wildcards[1] == "w.z" and #ctx.wildcards == 1)
+    check("header: stops at first declaration", ctx.explicit.Header == nil)
+
+    check("rank: explicit import", imports.rank(ctx, "Foo", "x.y") == 1)
+    check("rank: explicit shadows same package", imports.rank(ctx, "Foo", "a.b") == imports.NONE)
+    check("rank: nested explicit import", imports.rank(ctx, "Inner", "x.y") == 1)
+    check("rank: same package", imports.rank(ctx, "Thing", "a.b") == 2)
+    check("rank: star import", imports.rank(ctx, "Thing", "w.z") == 3)
+    check("rank: default import", imports.rank(ctx, "Thing", "kotlin.collections") == 4)
+    check("rank: unrelated", imports.rank(ctx, "Thing", "q.r") == imports.NONE)
+    check("rank: no package", imports.rank(ctx, "Thing", nil) == imports.NONE)
+end
+
+-------------------------------------------------------------------
+-- Test 34: gd uses the header to skip the picker
+-------------------------------------------------------------------
+do
+    local captured, orig = nil, vim.ui.select
+    vim.ui.select = function(list, o) captured = { list = list, opts = o } end
+
+    local function gd_on(file, needle, word)
+        captured = nil
+        open(file)
+        local start = bufname()
+        cursor_on(line_of(needle), word)
+        actions.goto_definition()
+        vim.wait(4000, function() return captured ~= nil or bufname() ~= start end, 20)
+    end
+    local function at(path, lnum)
+        return captured == nil and bufname():match(vim.pesc(path) .. "$") ~= nil and cur_line() == lnum
+    end
+
+    gd_on("defs/imports/user/User.kt", "fun use", "Dup")
+    check("rank gd: explicit import wins over another package", at("defs/imports/other/Dup.kt", 3), bufname())
+    gd_on("defs/imports/user/User.kt", "fun use", "Inner")
+    check("rank gd: explicit nested import", at("defs/imports/main/Dup.kt", 6), bufname())
+    gd_on("defs/imports/user/User.kt", "fun use", "aliasFun")
+    check("rank gd: alias used in code -> aliased decl", at("defs/imports/main/Dup.kt", 9), bufname())
+    gd_on("defs/imports/main/SamePkg.kt", "fun same", "Dup")
+    check("rank gd: same package, no import", at("defs/imports/main/Dup.kt", 3), bufname())
+    gd_on("defs/imports/user/Star.kt", "fun star", "Dup")
+    check("rank gd: star import", at("defs/imports/other/Dup.kt", 3), bufname())
+
+    gd_on("defs/imports/user/Bare.kt", "fun bare", "Dup")
+    local n = captured and #captured.list or 0
+    check("rank gd: nothing in header -> picker with all", n == 2, tostring(n))
+    local fmt = captured and captured.opts.format_item or tostring
+    check("rank gd: no markers when nothing matched",
+        captured and not fmt(captured.list[1]):find("●", 1, true))
+
+    gd_on("defs/imports/user/Mixed.kt", "fun mixed", "Twin")
+    local lines = captured and vim.tbl_map(captured.opts.format_item, captured.list) or {}
+    check("rank gd: tie on best rank -> picker", #lines == 3, tostring(#lines))
+    check("rank gd: matched rows marked and first",
+        (lines[1] or ""):match("^● expect%s+class Twin") and (lines[2] or ""):match("^● actual%s+class Twin")
+        and (lines[3] or ""):match("^  %s*class Twin%s+defs/imports/other · Twin%.kt:3$") ~= nil, table.concat(lines, " | "))
+
+    vim.ui.select = orig
+end
+
+-------------------------------------------------------------------
+-- Test 35: K picks the declaration the header points at
+-------------------------------------------------------------------
+do
+    local shown, orig = nil, vim.lsp.util.open_floating_preview
+    vim.lsp.util.open_floating_preview = function(lines) shown = lines end
+    open("defs/imports/user/User.kt")
+    cursor_on(line_of("fun use"), "Dup")
+    actions.hover()
+    vim.wait(4000, function() return shown ~= nil end, 20)
+    vim.lsp.util.open_floating_preview = orig
+    local footer = shown and shown[#shown] or ""
+    check("rank K: hover shows the imported Dup", footer:find("defs/imports/other/Dup.kt:3", 1, true) ~= nil, footer)
 end
 
 -------------------------------------------------------------------

@@ -3,6 +3,7 @@
 local search = require("kotlin-lite.search")
 local jars = require("kotlin-lite.jars")
 local defs = require("kotlin-lite.defs")
+local imports = require("kotlin-lite.imports")
 
 local M = {}
 
@@ -33,23 +34,18 @@ local function jump(it)
     vim.cmd("normal! zvzz")
 end
 
--- prefer a project match over a jar match
-local function best(items)
-    for _, it in ipairs(items) do
-        if not jars.is_jar(it.filename) then return it end
-    end
-    return items[1]
-end
+local package_of = imports.package_of
 
--- package declared in `file` (reads only the head of the file)
-local function package_of(file)
-    local ok, lines = pcall(vim.fn.readfile, file, "", 40)
-    if not ok then return nil end
-    for _, l in ipairs(lines) do
-        local pkg = l:match("^%s*package%s+([%w_.]+)")
-        if pkg then return pkg end
+-- the match the file header points at (imports / package), then project over jar
+local function best(items, word)
+    imports.rank_items(imports.current(), word, items)
+    local pick
+    for _, it in ipairs(items) do
+        local better = not pick or it.rank < pick.rank
+            or (it.rank == pick.rank and jars.is_jar(pick.filename) and not jars.is_jar(it.filename))
+        if better then pick = it end
     end
-    return nil
+    return pick
 end
 
 -------------------------------------------------------------------
@@ -88,7 +84,7 @@ local function in_qualifier(items, qualifier)
     local best_len, keep = -1, {}
     for _, it in ipairs(items) do
         local pkg = package_of(it.filename)
-        if pkg and (pkg == qualifier or qualifier:sub(1, #pkg + 1) == pkg .. ".") then
+        if pkg and imports.within(pkg, qualifier) then
             if #pkg > best_len then best_len, keep = #pkg, {} end
             if #pkg == best_len then keep[#keep + 1] = it end
         end
@@ -107,6 +103,9 @@ function M.goto_definition()
             vim.log.levels.INFO)
         return
     end
+    -- `import a.b.foo as bar` + gd on `bar` in code -> same as gd on the import
+    local ctx = imports.current()
+    imp = imp or ctx.aliases[word]
     if imp then word = imp.name
     elseif search.find_decl_in_buffer(word) then return end
 
@@ -123,8 +122,19 @@ function M.goto_definition()
             vim.notify("kotlin-lite: no declaration found for '" .. word .. "'", vim.log.levels.WARN)
             return
         end
-        local project = vim.tbl_filter(function(it) return not jars.is_jar(it.filename) end, items)
-        local pick = #project > 0 and project or defs.latest_only(items)
+        local pick
+        if not imp and imports.rank_items(ctx, word, items) < imports.NONE then
+            -- the header decides: a sole best-ranked match wins outright,
+            -- otherwise the picker lists best-ranked matches first
+            pick = defs.latest_only(items)
+            local top_rank = math.huge
+            for _, it in ipairs(pick) do top_rank = math.min(top_rank, it.rank) end
+            local top = vim.tbl_filter(function(it) return it.rank == top_rank end, pick)
+            if #top == 1 then return jump(top[1]) end
+        else
+            local project = vim.tbl_filter(function(it) return not jars.is_jar(it.filename) end, items)
+            pick = #project > 0 and project or defs.latest_only(items)
+        end
         if #pick == 1 then
             jump(pick[1])
         else
@@ -185,7 +195,7 @@ function M.hover()
             vim.notify("kotlin-lite: nothing found for '" .. word .. "'", vim.log.levels.WARN)
             return
         end
-        show_float(best(items))
+        show_float(best(items, word))
     end)
 end
 
@@ -201,7 +211,7 @@ function M.signature_help()
             vim.notify("kotlin-lite: no signature found for '" .. name .. "'", vim.log.levels.WARN)
             return
         end
-        show_float(best(items))
+        show_float(best(items, name))
     end)
 end
 

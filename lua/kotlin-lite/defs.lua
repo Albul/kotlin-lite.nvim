@@ -1,6 +1,6 @@
 -- Definition picker rows: drop stale jar versions, split each declaration into
 -- columns (expect/actual, signature, source set, origin + file:line) and sort
--- expect before actual.
+-- header-matched (imports.rank_items) first, then expect before actual.
 
 local jars = require("kotlin-lite.jars")
 
@@ -72,11 +72,13 @@ local function source_set(path)
 end
 M._source_set = source_set
 
--- project module = path before the first "src/" ("" at the root)
+-- project module = path before the first "src/" ("" at the root); outside a
+-- src/ layout, the file's directory
 local function module_of(rel)
     local mod = rel:match("^(.-)/?src/")
-    if mod == nil then return "" end
-    return mod
+    if mod then return mod end
+    local dir = vim.fs.dirname(rel)
+    return dir == "." and "" or dir
 end
 
 -- strip visibility / expect / actual / ... and the trailing "{"
@@ -119,8 +121,11 @@ end
 
 local MP_RANK = { expect = 0, actual = 2 }
 
--- project before jars, expect / plain before actual, then source set + location
+-- header rank (imports.rank_items) first, then project before jars, expect /
+-- plain before actual, then source set + location
 local function before(a, b)
+    local ka, kb = a.it.rank or 0, b.it.rank or 0
+    if ka ~= kb then return ka < kb end
     if a.d.jar ~= b.d.jar then return not a.d.jar end
     local ra, rb = MP_RANK[a.d.mp] or 1, MP_RANK[b.d.mp] or 1
     if ra ~= rb then return ra < rb end
@@ -149,6 +154,11 @@ function M.rows(items)
     end
     table.sort(rows, before)
 
+    -- mark the rows the file header points at, but only when some rows don't
+    -- qualify -- an all-marked list says nothing
+    local top = rows[1] and rows[1].it.rank
+    local mixed = top and top < rows[#rows].it.rank
+
     local w = { mp = 0, sig = 0, sset = 0 }
     for _, r in ipairs(rows) do
         r.d.sig = clip(r.d.sig, SIG_MAX)
@@ -164,6 +174,7 @@ function M.rows(items)
         local where = d.origin ~= "" and (d.origin .. " · " .. loc) or loc
         local chunks = {}
         local function add(s, hl) chunks[#chunks + 1] = { s, hl } end
+        if mixed then add(r.it.rank == top and "● " or "  ", "DiagnosticOk") end
         if w.mp > 0 then add(pad(d.mp or "", w.mp) .. "  ", d.mp and "Keyword" or nil) end
         add(pad(d.sig, w.sig) .. "  ")
         if w.sset > 0 then add(pad(d.sset or "", w.sset) .. "  ", "Type") end
