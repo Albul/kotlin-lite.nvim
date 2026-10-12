@@ -55,13 +55,58 @@ end
 -------------------------------------------------------------------
 -- goto definition (gd)
 -------------------------------------------------------------------
+
+-- `import a.b.Foo.Inner [as X]` with the cursor on a path segment or the alias
+-- -> { name = decl to look up, qualifier = what precedes it ("a.b.Foo") }
+local function import_target(line, word)
+    local path, alias = line:match("^%s*import%s+([%w_.]+)%s+as%s+([%w_]+)")
+    path = path or line:match("^%s*import%s+([%w_.]+)")
+    if not path then return nil end
+    local segs = vim.split(path, ".", { plain = true })
+    if alias == word then
+        return { name = segs[#segs], qualifier = table.concat(segs, ".", 1, #segs - 1) }
+    end
+    for i = #segs, 1, -1 do
+        if segs[i] == word then
+            return { name = word, qualifier = table.concat(segs, ".", 1, i - 1) }
+        end
+    end
+    return nil
+end
+M._import_target = import_target
+
+-- keep matches whose file package is the qualifier itself (top-level decl) or,
+-- for nested decls, its longest package prefix
+local function in_qualifier(items, qualifier)
+    local best_len, keep = -1, {}
+    for _, it in ipairs(items) do
+        local pkg = package_of(it.filename)
+        if pkg and (pkg == qualifier or qualifier:sub(1, #pkg + 1) == pkg .. ".") then
+            if #pkg > best_len then best_len, keep = #pkg, {} end
+            if #pkg == best_len then keep[#keep + 1] = it end
+        end
+    end
+    return keep
+end
+
 function M.goto_definition()
     local word = vim.fn.expand("<cword>")
     if word == "" then return end
 
-    if search.find_decl_in_buffer(word) then return end
+    -- on an import line the FQ path pins the package: no in-buffer search, no guessing
+    local imp = import_target(vim.api.nvim_get_current_line(), word)
+    if imp then word = imp.name
+    elseif search.find_decl_in_buffer(word) then return end
 
     search.rg(search.decl_args(word), search.search_dirs(), function(items)
+        if imp then
+            items = in_qualifier(items, imp.qualifier)
+            if #items == 0 then
+                vim.notify(("kotlin-lite: no declaration of '%s' in %s"):format(word, imp.qualifier),
+                    vim.log.levels.WARN)
+                return
+            end
+        end
         if #items == 0 then
             vim.notify("kotlin-lite: no declaration found for '" .. word .. "'", vim.log.levels.WARN)
             return

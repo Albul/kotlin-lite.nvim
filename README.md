@@ -9,7 +9,7 @@ or unavailable, and for reading library sources extracted from `*-sources.jar`.
 
 | Default keymap        | Action                                                                 |
 | --------------------- | ---------------------------------------------------------------------- |
-| `gd`                  | Go to definition — current buffer first (locals, params, lambda params, for-vars, properties, funs, classes), then project-wide + extracted jar sources. Multiple hits open a picker with preview: `expect`/`actual` · signature · source set · module or `artifact version` · `file:line` (older versions of the same jar are hidden) |
+| `gd`                  | Go to definition — current buffer first (locals, params, lambda params, for-vars, properties, funs, classes), then project-wide + extracted jar sources. Multiple hits open a picker with preview: `expect`/`actual` · signature · source set · module or `artifact version` · `file:line` (older versions of the same jar are hidden). On an `import` line it resolves through the full path (incl. nested classes and `as` aliases) and jumps without a picker |
 | `K`                   | Hover: declaration + KDoc in a floating window                         |
 | `gK`                  | Signature of the function whose call the cursor is inside              |
 | `gu` / `grr`          | Find usages → quickfix panel at the bottom                             |

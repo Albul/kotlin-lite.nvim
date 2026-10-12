@@ -691,6 +691,52 @@ do
 end
 
 -------------------------------------------------------------------
+-- Test 32: gd on an import line resolves through the FQ path
+-------------------------------------------------------------------
+do
+    local t = actions._import_target("import a.b.Foo.Inner", "Inner")
+    check("import: last segment", t and t.name == "Inner" and t.qualifier == "a.b.Foo")
+    t = actions._import_target("import a.b.Foo.Inner", "Foo")
+    check("import: middle segment", t and t.name == "Foo" and t.qualifier == "a.b")
+    t = actions._import_target("import a.b.foo as bar", "bar")
+    check("import: alias -> original name", t and t.name == "foo" and t.qualifier == "a.b")
+    check("import: not an import line", actions._import_target("val x = a.b.Foo", "Foo") == nil)
+
+    local picked, orig = false, vim.ui.select
+    vim.ui.select = function() picked = true end
+    local user = "defs/imports/user/User.kt"
+
+    local function gd_on(needle, word)
+        open(user)
+        cursor_on(line_of(needle), word)
+        actions.goto_definition()
+        return vim.wait(4000, function() return not bufname():match("User%.kt$") end, 20)
+    end
+
+    check("import gd: class -> its package, no picker",
+        gd_on("import defs.other.Dup", "Dup") and not picked
+        and bufname():match("defs/imports/other/Dup%.kt$") and cur_line() == 3, bufname())
+    check("import gd: nested class via outer qualifier",
+        gd_on("import defs.main.Outer.Inner", "Inner") and not picked
+        and bufname():match("defs/imports/main/Dup%.kt$") and cur_line() == 6, bufname())
+    check("import gd: outer segment of nested import",
+        gd_on("import defs.main.Outer.Inner", "Outer")
+        and bufname():match("defs/imports/main/Dup%.kt$") and cur_line() == 5)
+    check("import gd: alias -> aliased top-level fun",
+        gd_on("import defs.main.dupFun", "aliasFun") and not picked
+        and bufname():match("defs/imports/main/Dup%.kt$") and cur_line() == 9)
+
+    -- unknown package: stays put, no fallback to a same-named class elsewhere
+    open(user)
+    cursor_on(line_of("import defs.missing.Dup"), "Dup")
+    actions.goto_definition()
+    vim.wait(600, function() return not bufname():match("User%.kt$") end, 20)
+    check("import gd: unknown package -> no jump", bufname():match("User%.kt$") ~= nil and not picked)
+
+    vim.ui.select = orig
+end
+
+-------------------------------------------------------------------
 io.write("\n")
 if failures == 0 then
     io.write("All checks passed.\n")
