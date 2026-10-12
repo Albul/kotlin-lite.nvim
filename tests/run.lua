@@ -586,6 +586,111 @@ do
 end
 
 -------------------------------------------------------------------
+-- Test 29: definition rows -- signature / source set helpers
+-------------------------------------------------------------------
+do
+    local defs = require("kotlin-lite.defs")
+
+    local sig, mp = defs._signature("public expect inline fun AutoCloseable(crossinline a: () -> Unit): AutoCloseable {")
+    check("defs: strips visibility + expect", sig == "inline fun AutoCloseable(crossinline a: () -> Unit): AutoCloseable", sig)
+    check("defs: reports expect", mp == "expect")
+    local sig2, mp2 = defs._signature("actual class Foo {")
+    check("defs: strips actual + trailing brace", sig2 == "class Foo" and mp2 == "actual", sig2)
+    local sig3, mp3 = defs._signature("data class Point(val x: Int)")
+    check("defs: keeps data, no expect/actual", sig3 == "data class Point(val x: Int)" and mp3 == nil, sig3)
+
+    check("defs: source set commonMain -> common", defs._source_set("m/src/commonMain/kotlin/A.kt") == "common")
+    check("defs: source set in jar path", defs._source_set("jvmMain/jdk7/kotlin/A.kt") == "jvm")
+    check("defs: source set jvmTest kept", defs._source_set("m/src/jvmTest/kotlin/A.kt") == "jvmTest")
+    check("defs: plain src/main -> nil", defs._source_set("src/main/kotlin/A.kt") == nil)
+end
+
+-------------------------------------------------------------------
+-- Test 30: gd on expect/actual -> one sorted, column-aligned picker
+-------------------------------------------------------------------
+do
+    local captured, orig = nil, vim.ui.select
+    vim.ui.select = function(list, opts) captured = { list = list, opts = opts } end
+
+    open("defs/shared/src/commonMain/kotlin/UseClock.kt")
+    cursor_on(line_of("c: KmpClock"), "KmpClock")
+    actions.goto_definition()
+    vim.wait(4000, function() return captured ~= nil end, 40)
+    vim.ui.select = orig
+
+    local list = captured and captured.list or {}
+    check("gd kmp: picker titled with the word", captured and captured.opts.prompt == "Definition: KmpClock")
+    check("gd kmp: 3 declarations", #list == 3, tostring(#list))
+    local fmt = captured and captured.opts.format_item or function(x) return x.display end
+    local lines = vim.tbl_map(fmt, list)
+    check("gd kmp: expect first", (lines[1] or ""):match("^expect%s+class KmpClock%s+common%s+defs/shared · KmpClock%.kt:3$") ~= nil, lines[1])
+    check("gd kmp: actual apple second", (lines[2] or ""):match("^actual%s+class KmpClock%s+apple%s+") ~= nil, lines[2])
+    check("gd kmp: actual jvm third", (lines[3] or ""):match("^actual%s+class KmpClock%s+jvm%s+.*KmpClock%.jvm%.kt:3$") ~= nil, lines[3])
+    check("gd kmp: no 'public' noise", not table.concat(lines, "\n"):find("public", 1, true))
+    local cols = vim.tbl_map(function(l) return (l:find("defs/shared", 1, true)) end, lines)
+    check("gd kmp: origin column aligned", cols[1] and cols[1] == cols[2] and cols[2] == cols[3])
+    local r = list[1] or {}
+    check("gd kmp: rows carry file + pos for preview",
+        r.file and r.file:match("KmpClock%.kt$") and r.pos and r.pos[1] == 3)
+    check("gd kmp: rows carry highlight chunks", r.chunks and r.chunks[1][2] == "Keyword")
+end
+
+-------------------------------------------------------------------
+-- Test 31: jar matches -> only the newest version of each artifact
+-------------------------------------------------------------------
+do
+    local jars = require("kotlin-lite.jars")
+    local defs = require("kotlin-lite.defs")
+    local opts = require("kotlin-lite.config").options
+    local saved_cache = opts.cache_dir
+    local tmp = vim.fn.tempname()
+    opts.cache_dir = tmp
+
+    local function fake_jar(hash, name, rel, line)
+        local dir = tmp .. "/" .. hash
+        vim.fn.mkdir(vim.fn.fnamemodify(dir .. "/" .. rel, ":h"), "p")
+        vim.fn.writefile({ "package kotlin", "", line }, dir .. "/" .. rel)
+        vim.fn.writefile({ name }, dir .. "/.jarname")
+        vim.fn.writefile({}, dir .. "/.extracted")
+    end
+    fake_jar("a", "kotlin-stdlib-2.0.0-sources.jar", "commonMain/kotlin/JarThing.kt", "public expect interface JarThing {")
+    fake_jar("b", "kotlin-stdlib-2.4.10-sources.jar", "commonMain/kotlin/JarThing.kt", "public expect interface JarThing {")
+    fake_jar("c", "kotlin-stdlib-2.4.0-sources.jar", "commonMain/kotlin/JarThing.kt", "public expect interface JarThing {")
+    fake_jar("d", "kotlin-stdlib-jdk8-1.9.0-sources.jar", "jvmMain/kotlin/JarThingJVM.kt", "public actual typealias JarThing = java.lang.Object")
+    jars.scan_cache()
+
+    local captured, orig = nil, vim.ui.select
+    vim.ui.select = function(list, o) captured = { list = list, opts = o } end
+    vim.cmd.enew()
+    vim.bo.filetype = "kotlin"
+    vim.api.nvim_buf_set_lines(0, 0, -1, false, { "val x: JarThing = TODO()" })
+    cursor_on(1, "JarThing")
+    actions.goto_definition()
+    vim.wait(4000, function() return captured ~= nil end, 40)
+    vim.ui.select = orig
+
+    local list = captured and captured.list or {}
+    local lines = vim.tbl_map(captured and captured.opts.format_item or tostring, list)
+    check("gd jar: stale versions dropped (4 -> 2)", #list == 2, table.concat(lines, " | "))
+    check("gd jar: newest stdlib kept", (lines[1] or ""):find("kotlin-stdlib 2.4.10 · JarThing.kt:3", 1, true) ~= nil, lines[1])
+    check("gd jar: distinct artifact jdk8 kept", (lines[2] or ""):find("kotlin-stdlib-jdk8 1.9.0 · JarThingJVM.kt:3", 1, true) ~= nil, lines[2])
+    check("gd jar: no [jar] tag / hash dir in label", not table.concat(lines, "\n"):find("%[jar%]"))
+
+    -- latest_only leaves project items alone
+    local mixed = defs.latest_only({
+        { filename = fixtures .. "/Geometry.kt", lnum = 1, text = "class Circle" },
+        { filename = tmp .. "/a/commonMain/kotlin/JarThing.kt", lnum = 3, text = "" },
+        { filename = tmp .. "/b/commonMain/kotlin/JarThing.kt", lnum = 3, text = "" },
+    })
+    check("defs: latest_only keeps project + newest jar", #mixed == 2
+        and mixed[1].filename:match("Geometry") and mixed[2].filename:find("/b/", 1, true))
+
+    opts.cache_dir = saved_cache
+    jars.scan_cache()
+    vim.fn.delete(tmp, "rf")
+end
+
+-------------------------------------------------------------------
 io.write("\n")
 if failures == 0 then
     io.write("All checks passed.\n")

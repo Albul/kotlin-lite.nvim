@@ -9,7 +9,7 @@ or unavailable, and for reading library sources extracted from `*-sources.jar`.
 
 | Default keymap        | Action                                                                 |
 | --------------------- | ---------------------------------------------------------------------- |
-| `gd`                  | Go to definition — current buffer first (locals, params, lambda params, for-vars, properties, funs, classes), then project-wide + extracted jar sources |
+| `gd`                  | Go to definition — current buffer first (locals, params, lambda params, for-vars, properties, funs, classes), then project-wide + extracted jar sources. Multiple hits open a picker with preview: `expect`/`actual` · signature · source set · module or `artifact version` · `file:line` (older versions of the same jar are hidden) |
 | `K`                   | Hover: declaration + KDoc in a floating window                         |
 | `gK`                  | Signature of the function whose call the cursor is inside              |
 | `gu` / `grr`          | Find usages → quickfix panel at the bottom                             |
@@ -220,6 +220,7 @@ lua/kotlin-lite/
 ├── config.lua    -- defaults + option merging
 ├── jars.lua      -- *-sources.jar discovery, extraction, read-only cache
 ├── search.lua    -- ripgrep + Kotlin decl patterns + in-buffer search
+├── defs.lua      -- gd picker rows: newest jar version only, expect/actual columns
 ├── actions.lua   -- gd / K / gK / gr / rename / rename-file / structure / symbols / alternate / fqname / auto-import / format
 ├── runner.lua    -- run + test (bottom terminal, gradle init-script, quickfix)
 ├── keymaps.lua   -- buffer-local + global keymap attachment

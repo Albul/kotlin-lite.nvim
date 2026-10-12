@@ -11,7 +11,8 @@ local function snacks()
     return nil
 end
 
---- @param items table[]  each: { text=match/label, display=?, data=?, file=?, lnum=?, col=?, pos=? }
+--- @param items table[]  each: { text=match/label, display=?, chunks=?, data=?, file=?, lnum=?, col=?, pos=? }
+---                       chunks = { {text, hl_group?}, ... } colours the snacks row
 --- @param opts table      { prompt = string }
 --- @param on_choice fun(data:any)
 function M.select(items, opts, on_choice)
@@ -20,7 +21,7 @@ function M.select(items, opts, on_choice)
         local pick_opts = {
             title = opts.prompt,
             items = items,
-            format = function(item) return { { item.display or item.text } } end,
+            format = function(item) return item.chunks or { { item.display or item.text } } end,
             matcher = { smartcase = false, ignorecase = true },
             confirm = function(picker, item)
                 picker:close()

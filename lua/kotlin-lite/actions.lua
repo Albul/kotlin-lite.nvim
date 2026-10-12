@@ -2,6 +2,7 @@
 
 local search = require("kotlin-lite.search")
 local jars = require("kotlin-lite.jars")
+local defs = require("kotlin-lite.defs")
 
 local M = {}
 
@@ -66,16 +67,13 @@ function M.goto_definition()
             return
         end
         local project = vim.tbl_filter(function(it) return not jars.is_jar(it.filename) end, items)
-        local pick = #project > 0 and project or items
+        local pick = #project > 0 and project or defs.latest_only(items)
         if #pick == 1 then
             jump(pick[1])
         else
-            vim.ui.select(pick, {
+            require("kotlin-lite.picker").select(defs.rows(pick), {
                 prompt = "Definition: " .. word,
-                format_item = display,
-            }, function(choice)
-                if choice then jump(choice) end
-            end)
+            }, jump)
         end
     end)
 end
