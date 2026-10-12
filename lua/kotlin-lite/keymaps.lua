@@ -2,7 +2,7 @@
 
 local M = {}
 
--- action name -> { handler, description }
+-- action name -> { handler, description, mode? (default "n") }
 local function specs()
     local actions = require("kotlin-lite.actions")
     local runner = require("kotlin-lite.runner")
@@ -10,6 +10,7 @@ local function specs()
         goto_definition    = { actions.goto_definition,        "Definition (kotlin-lite)" },
         hover              = { actions.hover,                   "Hover (kotlin-lite)" },
         signature_help     = { actions.signature_help,         "Signature (kotlin-lite)" },
+        signature_help_insert = { actions.signature_help,      "Signature (kotlin-lite)", "i" },
         find_usages        = { actions.find_usages,            "Usages (kotlin-lite)" },
         rename             = { actions.rename,                 "Rename symbol (kotlin-lite)" },
         rename_file        = { actions.rename_file,            "Rename file (kotlin-lite)" },
@@ -72,9 +73,13 @@ function M.attach(buf)
         if spec and lhs and not GLOBAL_ONLY[name] then
             local list = type(lhs) == "table" and lhs or { lhs }
             for _, l in ipairs(list) do
-                map(l, spec[1], spec[2])
+                map(l, spec[1], spec[2], spec[3])
             end
         end
+    end
+
+    if opts.tagfunc then
+        vim.bo[buf].tagfunc = "v:lua.require'kotlin-lite.actions'.tagfunc"
     end
 
     -- `=` (normal + visual) formats the whole buffer via ktlint (see format_buffer)

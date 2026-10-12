@@ -106,6 +106,42 @@ local function in_qualifier(items, qualifier)
     return keep
 end
 
+-- what `word` under the cursor refers to: on an import line the FQ path pins the
+-- package; an `as` alias used in code resolves like its import.
+-- -> { word = name to look up, imp = { name, qualifier }?, ctx = header },
+--    or { wildcard = "a.b" } on `import a.b.*`
+local function lookup(word)
+    local imp = import_target(vim.api.nvim_get_current_line(), word)
+    if imp and imp.wildcard then return imp end
+    local ctx = imports.current()
+    imp = imp or ctx.aliases[word]
+    return { word = imp and imp.name or word, imp = imp, ctx = ctx }
+end
+
+-- rg decl matches -> pool, err, sole. `pool` is what the picker offers, `sole`
+-- the one match the file header singles out (jump without asking), `err` the
+-- message when nothing qualifies.
+local function candidates(items, q)
+    if q.imp then
+        items = in_qualifier(items, q.imp.qualifier)
+        if #items == 0 then
+            return nil, ("no declaration of '%s' in %s"):format(q.word, q.imp.qualifier)
+        end
+    end
+    if #items == 0 then return nil, "no declaration found for '" .. q.word .. "'" end
+    if not q.imp and imports.rank_items(q.ctx, q.word, items) < imports.NONE then
+        -- the header decides: a sole best-ranked match wins outright,
+        -- otherwise the picker lists best-ranked matches first
+        local pool = defs.latest_only(items)
+        local top_rank = math.huge
+        for _, it in ipairs(pool) do top_rank = math.min(top_rank, it.rank) end
+        local top = vim.tbl_filter(function(it) return it.rank == top_rank end, pool)
+        return pool, nil, #top == 1 and top[1] or nil
+    end
+    local project = vim.tbl_filter(function(it) return not jars.is_jar(it.filename) end, items)
+    return #project > 0 and project or defs.latest_only(items)
+end
+
 function M.goto_definition()
     local word = vim.fn.expand("<cword>")
     if word == "" then return end
@@ -115,45 +151,22 @@ function M.goto_definition()
         jump(it)
     end
 
-    -- on an import line the FQ path pins the package: no in-buffer search, no guessing
-    local imp = import_target(vim.api.nvim_get_current_line(), word)
-    if imp and imp.wildcard then
-        vim.notify("kotlin-lite: wildcard import of " .. imp.wildcard .. ", nothing to jump to",
+    local q = lookup(word)
+    if q.wildcard then
+        vim.notify("kotlin-lite: wildcard import of " .. q.wildcard .. ", nothing to jump to",
             vim.log.levels.INFO)
         return
     end
-    -- `import a.b.foo as bar` + gd on `bar` in code -> same as gd on the import
-    local ctx = imports.current()
-    imp = imp or ctx.aliases[word]
-    if imp then word = imp.name
-    elseif search.find_decl_in_buffer(word) then return push_tag(origin) end
+    if not q.imp and search.find_decl_in_buffer(word) then return push_tag(origin) end
+    word = q.word
 
     search.rg(search.decl_args(word), search.search_dirs(), function(items)
-        if imp then
-            items = in_qualifier(items, imp.qualifier)
-            if #items == 0 then
-                vim.notify(("kotlin-lite: no declaration of '%s' in %s"):format(word, imp.qualifier),
-                    vim.log.levels.WARN)
-                return
-            end
-        end
-        if #items == 0 then
-            vim.notify("kotlin-lite: no declaration found for '" .. word .. "'", vim.log.levels.WARN)
+        local pick, err, sole = candidates(items, q)
+        if not pick then
+            vim.notify("kotlin-lite: " .. err, vim.log.levels.WARN)
             return
         end
-        local pick
-        if not imp and imports.rank_items(ctx, word, items) < imports.NONE then
-            -- the header decides: a sole best-ranked match wins outright,
-            -- otherwise the picker lists best-ranked matches first
-            pick = defs.latest_only(items)
-            local top_rank = math.huge
-            for _, it in ipairs(pick) do top_rank = math.min(top_rank, it.rank) end
-            local top = vim.tbl_filter(function(it) return it.rank == top_rank end, pick)
-            if #top == 1 then return go(top[1]) end
-        else
-            local project = vim.tbl_filter(function(it) return not jars.is_jar(it.filename) end, items)
-            pick = #project > 0 and project or defs.latest_only(items)
-        end
+        if sole then return go(sole) end
         if #pick == 1 then
             go(pick[1])
         else
@@ -162,6 +175,39 @@ function M.goto_definition()
             }, go)
         end
     end)
+end
+
+-------------------------------------------------------------------
+-- 'tagfunc': <C-]>, <C-w>], g], :tag, :ptag, <C-w>} through gd's lookup
+-------------------------------------------------------------------
+
+-- Same resolution as gd, as tag items ordered best first (<C-]> takes the
+-- first). Blocking rg: Vim needs the answer at once. Insert-mode completion
+-- and :tag /regex fall back to tags files.
+function M.tagfunc(pattern, flags)
+    if flags:find("[ir]") or not pattern:match("^[%a_][%w_]*$") then return vim.NIL end
+    local cursor = flags:find("c") ~= nil
+    local q = cursor and lookup(pattern)
+        or { word = pattern, ctx = imports.current() }
+    if q.wildcard then return {} end
+
+    local function tag(file, lnum, col)
+        return { name = pattern, filename = file, cmd = ("/\\%%%dl\\%%%dc/"):format(lnum, col) }
+    end
+    if cursor and not q.imp then
+        local local_decl = search.decl_in_buffer(pattern)
+        if local_decl then
+            return { tag(vim.api.nvim_buf_get_name(0), local_decl.lnum, local_decl.col + 1) }
+        end
+    end
+
+    local pool = candidates(search.rg_sync(search.decl_args(q.word), search.search_dirs()), q)
+    if not pool then return {} end
+    local out = {}
+    for _, row in ipairs(defs.rows(pool)) do -- rows come sorted best first
+        out[#out + 1] = tag(row.data.filename, row.data.lnum, row.data.col or 1)
+    end
+    return out
 end
 
 -------------------------------------------------------------------
@@ -241,6 +287,8 @@ function M.find_usages()
     local word = vim.fn.expand("<cword>")
     if word == "" then return end
     search.rg({ "-w", "-e", word }, { search.root() }, function(items)
+        -- mentions in comments / KDoc are not usages
+        items = vim.tbl_filter(function(it) return not search.is_comment_text(it.text) end, items)
         if #items == 0 then
             vim.notify("kotlin-lite: no usages of '" .. word .. "' found", vim.log.levels.INFO)
             return

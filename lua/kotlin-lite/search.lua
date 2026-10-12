@@ -37,30 +37,45 @@ function M.decl_args(word)
     return args
 end
 
--- run rg, collect quickfix-style items deduped by file:line, callback on the main loop
-function M.rg(extra, dirs, cb)
+local function rg_cmd(extra, dirs)
     local cmd = { "rg", "--vimgrep", "--no-messages", "-t", "kotlin", "-t", "java" }
     vim.list_extend(cmd, extra)
     vim.list_extend(cmd, dirs)
-    vim.system(cmd, { text = true }, function(res)
-        local items, seen = {}, {}
-        for _, line in ipairs(vim.split(res.stdout or "", "\n", { trimempty = true })) do
-            local file, lnum, col, text = line:match("^(.-):(%d+):(%d+):(.*)$")
-            if file then
-                local key = file .. ":" .. lnum
-                if not seen[key] then
-                    seen[key] = true
-                    table.insert(items, {
-                        filename = file,
-                        lnum = tonumber(lnum),
-                        col = tonumber(col),
-                        text = vim.trim(text),
-                    })
-                end
+    return cmd
+end
+
+-- rg --vimgrep output -> quickfix-style items deduped by file:line
+local function parse(stdout)
+    local items, seen = {}, {}
+    for _, line in ipairs(vim.split(stdout or "", "\n", { trimempty = true })) do
+        local file, lnum, col, text = line:match("^(.-):(%d+):(%d+):(.*)$")
+        if file then
+            local key = file .. ":" .. lnum
+            if not seen[key] then
+                seen[key] = true
+                table.insert(items, {
+                    filename = file,
+                    lnum = tonumber(lnum),
+                    col = tonumber(col),
+                    text = vim.trim(text),
+                })
             end
         end
+    end
+    return items
+end
+
+-- run rg, callback with the items on the main loop
+function M.rg(extra, dirs, cb)
+    vim.system(rg_cmd(extra, dirs), { text = true }, function(res)
+        local items = parse(res.stdout)
         vim.schedule(function() cb(items) end)
     end)
+end
+
+-- blocking rg, for callers that must answer at once (tagfunc)
+function M.rg_sync(extra, dirs)
+    return parse(vim.system(rg_cmd(extra, dirs), { text = true }):wait().stdout)
 end
 
 -- project root + every extracted jar source tree
@@ -102,15 +117,19 @@ function M.buffer_decl_patterns(w)
     return pats
 end
 
-function M.is_comment_line(buf, lnum)
-    local line = vim.api.nvim_buf_get_lines(buf, lnum - 1, lnum, false)[1] or ""
+-- line text opens with //, /* or a KDoc "*"
+function M.is_comment_text(line)
     local stripped = line:match("^%s*(.*)$") or ""
-    return stripped:sub(1, 2) == "//" or stripped:sub(1, 1) == "*"
+    return stripped:sub(1, 2) == "//" or stripped:sub(1, 1) == "*" or stripped:sub(1, 2) == "/*"
 end
 
--- Jump to `word`'s declaration in the current buffer: nearest one at/above the
--- cursor, else the first below. Returns true if it jumped.
-function M.find_decl_in_buffer(word)
+function M.is_comment_line(buf, lnum)
+    return M.is_comment_text(vim.api.nvim_buf_get_lines(buf, lnum - 1, lnum, false)[1] or "")
+end
+
+-- `word`'s declaration in the current buffer: nearest one at/above the cursor,
+-- else the first below. Returns { lnum, col (0-based) } or nil.
+function M.decl_in_buffer(word)
     local buf = vim.api.nvim_get_current_buf()
     local cur = vim.api.nvim_win_get_cursor(0)
     local cur_lnum, cur_col = cur[1], cur[2] -- col is 0-based
@@ -132,7 +151,7 @@ function M.find_decl_in_buffer(word)
             end
         end
     end
-    if #matches == 0 then return false end
+    if #matches == 0 then return nil end
 
     table.sort(matches, function(a, b)
         if a.lnum ~= b.lnum then return a.lnum < b.lnum end
@@ -142,7 +161,13 @@ function M.find_decl_in_buffer(word)
     for _, m in ipairs(matches) do
         if m.lnum <= cur_lnum then target = m else break end
     end
+    return target
+end
 
+-- Jump to decl_in_buffer(word). Returns true if it jumped.
+function M.find_decl_in_buffer(word)
+    local target = M.decl_in_buffer(word)
+    if not target then return false end
     vim.cmd("normal! m'")
     vim.api.nvim_win_set_cursor(0, { target.lnum, target.col })
     vim.cmd("normal! zv")

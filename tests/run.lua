@@ -899,6 +899,99 @@ do
 end
 
 -------------------------------------------------------------------
+-- Test 37: 'tagfunc' resolves like gd (<C-]>, <C-w>], :tag, :ptag)
+-------------------------------------------------------------------
+do
+    local function file_of(t) return t and t.filename:match("([^/]+/[^/]+)$") end
+    local function lnum_of(t) return t and tonumber(t.cmd:match("%%(%d+)l")) end
+
+    open("Main.kt")
+    check("tagfunc: set on kotlin buffers", vim.bo.tagfunc:find("kotlin%-lite") ~= nil, vim.bo.tagfunc)
+    check("tagfunc: insert-mode completion falls back", actions.tagfunc("Cir", "i") == vim.NIL)
+    check("tagfunc: regex falls back", actions.tagfunc("^Cir", "r") == vim.NIL)
+
+    cursor_on(line_of("Circle(radius)"), "Circle")
+    local tags = actions.tagfunc("Circle", "c")
+    -- same-package class first; jar `Circle`s (from the local cache) may follow
+    check("tagfunc: class in another file, best first", tags[1] and tags[1].filename:match("Geometry%.kt$")
+        and tags[1].name == "Circle", vim.inspect(tags))
+    check("tagfunc: cmd addresses line + column", tags[1] and tags[1].cmd == "/\\%8l\\%1c/", tags[1] and tags[1].cmd)
+
+    cursor_on(line_of("Circle(radius)"), "radius")
+    tags = actions.tagfunc("radius", "c")
+    check("tagfunc: local decl from the buffer", #tags == 1 and tags[1].filename:match("Main%.kt$")
+        and lnum_of(tags[1]) == line_of("val radius"), vim.inspect(tags))
+
+    open("defs/imports/user/User.kt")
+    cursor_on(line_of("import defs.other.Dup"), "other")
+    tags = actions.tagfunc("other", "c")
+    check("tagfunc: import line -> imported decl", #tags == 1 and file_of(tags[1]) == "other/Dup.kt", vim.inspect(tags))
+
+    open("defs/imports/user/Mixed.kt")
+    cursor_on(line_of("fun mixed"), "Twin")
+    tags = actions.tagfunc("Twin", "c")
+    check("tagfunc: header-ranked first", #tags == 3 and file_of(tags[1]) == "extra/Twin.kt"
+        and file_of(tags[3]) == "other/Twin.kt", vim.inspect(vim.tbl_map(file_of, tags)))
+
+    -- :tag by name (no cursor) + <C-]> + <C-w>] + :ptag, end to end
+    vim.fn.settagstack(0, { items = {} }, "r")
+    open("Main.kt")
+    vim.cmd("tag Circle")
+    check(":tag Circle -> Geometry.kt", bufname():match("Geometry%.kt$") and cur_line() == 8)
+    vim.cmd("pop")
+
+    open("Main.kt")
+    cursor_on(line_of("Circle(radius)"), "Circle")
+    vim.cmd("execute \"normal! \\<C-]>\"")
+    check("<C-]> -> Geometry.kt", bufname():match("Geometry%.kt$") and cur_line() == 8)
+    check("<C-]> pushes the tag stack", vim.fn.gettagstack().length >= 1)
+
+    open("Main.kt")
+    cursor_on(line_of("Circle(radius)"), "Circle")
+    local wins = #vim.api.nvim_tabpage_list_wins(0)
+    vim.cmd("execute \"normal! \\<C-w>]\"")
+    check("<C-w>] -> definition in a new split",
+        #vim.api.nvim_tabpage_list_wins(0) == wins + 1 and bufname():match("Geometry%.kt$") ~= nil)
+    vim.cmd("close")
+    check("<C-w>] leaves the origin window on Main.kt", bufname():match("Main%.kt$") ~= nil)
+
+    vim.cmd("ptag Circle")
+    local preview
+    for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+        if vim.wo[w].previewwindow then preview = w end
+    end
+    check(":ptag -> preview window on Geometry.kt, cursor stays",
+        preview and vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(preview)):match("Geometry%.kt$")
+        and bufname():match("Main%.kt$"))
+    vim.cmd("pclose")
+end
+
+-------------------------------------------------------------------
+-- Test 38: gu skips comment / KDoc mentions; <C-s> in insert mode
+-------------------------------------------------------------------
+do
+    open("Geometry.kt")
+    cursor_on(line_of("class Circle"), "radius")
+    vim.fn.setqflist({}, "r")
+    actions.find_usages()
+    vim.wait(4000, function() return #vim.fn.getqflist() > 0 end, 40)
+    local kdoc = false
+    for _, it in ipairs(vim.fn.getqflist()) do
+        if it.text:find("[radius]", 1, true) then kdoc = true end
+    end
+    check("gu: KDoc mention of radius excluded", #vim.fn.getqflist() > 0 and not kdoc)
+    vim.cmd("cclose")
+
+    check("search: comment text", require("kotlin-lite.search").is_comment_text("  * [radius]")
+        and require("kotlin-lite.search").is_comment_text("/* x */")
+        and not require("kotlin-lite.search").is_comment_text("val a = b // c"))
+
+    open("Main.kt")
+    local m = vim.fn.maparg("<C-s>", "i", false, true)
+    check("<C-s>: insert-mode signature help, buffer-local", m.buffer == 1 and (m.desc or ""):find("Signature") ~= nil)
+end
+
+-------------------------------------------------------------------
 io.write("\n")
 if failures == 0 then
     io.write("All checks passed.\n")

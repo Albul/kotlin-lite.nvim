@@ -36,6 +36,9 @@ M.defaults = {
     -- in a gradle project, expose the `<leader>k` menu (run/sources/explorer/…)
     -- in every buffer, not only kotlin files
     project_keymaps = true,
+    -- set 'tagfunc' in kotlin buffers: <C-]>, <C-w>], g], :tag, :ptag resolve
+    -- like gd (as Neovim does for LSP buffers)
+    tagfunc = true,
     -- also register IntelliJ-style keymaps on top of the vim ones
     intellij_keymaps = false,
     -- optional snacks.nvim explorer integration (compact middle packages etc.)
@@ -88,6 +91,7 @@ M.defaults = {
         goto_definition    = { "gd", "grt" },  -- grt (type_definition) alias
         hover              = "K",
         signature_help     = "gK",
+        signature_help_insert = "<C-s>", -- insert mode, like Neovim's LSP default
         find_usages        = { "gu", "grr" },  -- grr (references) alias
         rename             = { "<leader>cr", "grn" }, -- grn (rename) alias
         rename_file        = "<leader>cR",

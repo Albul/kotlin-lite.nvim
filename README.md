@@ -11,8 +11,9 @@ or unavailable, and for reading library sources extracted from `*-sources.jar`.
 | --------------------- | ---------------------------------------------------------------------- |
 | `gd`                  | Go to definition — current buffer first (locals, params, lambda params, for-vars, properties, funs, classes), then project-wide + extracted jar sources, ranked like the compiler does from the file header (explicit import → same package → `*` import → default `kotlin.*` imports; `as` aliases resolved) — a single best match is jumped to directly. Multiple hits open a picker with preview: `expect`/`actual` · signature · source set · module or `artifact version` · `file:line` (older versions of the same jar are hidden). On an `import` line it resolves through the full path (incl. nested classes and `as` aliases) and jumps without a picker. Every jump is pushed on the tag stack, so `<C-t>` / `:tags` walk back gd by gd, like with LSP |
 | `K`                   | Hover: declaration + KDoc in a floating window                         |
-| `gK`                  | Signature of the function whose call the cursor is inside              |
-| `gu` / `grr`          | Find usages → quickfix panel at the bottom                             |
+| `gK` / `<C-s>` (insert) | Signature of the function whose call the cursor is inside            |
+| `<C-]>` `<C-w>]` `g]` `:tag` `:ptag` `<C-w>}` | Vim's tag commands resolve like `gd` (via `'tagfunc'`, as Neovim does for LSP buffers): jump, open in a split, list all candidates, jump by name, preview without leaving the file |
+| `gu` / `grr`          | Find usages → quickfix panel at the bottom (mentions in comments / KDoc skipped) |
 | `<leader>cr`          | Rename symbol: project-wide word search & replace with confirmation    |
 | `<leader>cR`          | Rename file; for a same-named top-level `class`/`interface`/`object`/`fun` it offers a module-scoped symbol rename |
 | `<leader>cs`          | File structure outline — top-level decls & class members (incl. private/protected/internal, marked with a UML sigil), with kind icons (IntelliJ `Ctrl+F12`) |
@@ -83,6 +84,7 @@ require("kotlin-lite").setup({
     snacks_integration = true,              -- optional snacks.nvim explorer (see below)
     auto_extract = true,                    -- extract essential library sources on startup
     project_keymaps = true,                 -- expose project-level maps globally in a gradle project
+    tagfunc = true,                         -- <C-]> / :tag / :ptag resolve like gd in kotlin buffers
     -- essentials = { kotlin = {...}, android = {...} }, -- artifact names to auto-extract
     run = {
         height = 15,                        -- bottom terminal split height
@@ -92,6 +94,7 @@ require("kotlin-lite").setup({
         goto_definition    = "gd",
         hover              = "K",
         signature_help     = "gK",
+        signature_help_insert = "<C-s>",  -- insert mode
         find_usages        = { "gu", "grr" },
         rename             = "<leader>cr",
         rename_file        = "<leader>cR",
