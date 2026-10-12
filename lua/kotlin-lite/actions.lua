@@ -27,6 +27,20 @@ local function display(it)
 end
 M.display = display
 
+-- where gd was invoked, for the tag stack: { win, item = settagstack item }
+local function tag_origin(name)
+    local from = vim.fn.getpos(".")
+    from[1] = vim.api.nvim_get_current_buf()
+    return { win = vim.api.nvim_get_current_win(), item = { tagname = name, from = from } }
+end
+
+-- push a gd jump on the tag stack so <C-t> / :tags / :pop work like with LSP
+local function push_tag(origin)
+    if vim.api.nvim_win_is_valid(origin.win) then
+        vim.fn.settagstack(origin.win, { items = { origin.item } }, "t")
+    end
+end
+
 local function jump(it)
     vim.cmd("normal! m'")
     vim.cmd.edit(vim.fn.fnameescape(it.filename))
@@ -95,6 +109,11 @@ end
 function M.goto_definition()
     local word = vim.fn.expand("<cword>")
     if word == "" then return end
+    local origin = tag_origin(word)
+    local function go(it)
+        push_tag(origin)
+        jump(it)
+    end
 
     -- on an import line the FQ path pins the package: no in-buffer search, no guessing
     local imp = import_target(vim.api.nvim_get_current_line(), word)
@@ -107,7 +126,7 @@ function M.goto_definition()
     local ctx = imports.current()
     imp = imp or ctx.aliases[word]
     if imp then word = imp.name
-    elseif search.find_decl_in_buffer(word) then return end
+    elseif search.find_decl_in_buffer(word) then return push_tag(origin) end
 
     search.rg(search.decl_args(word), search.search_dirs(), function(items)
         if imp then
@@ -130,17 +149,17 @@ function M.goto_definition()
             local top_rank = math.huge
             for _, it in ipairs(pick) do top_rank = math.min(top_rank, it.rank) end
             local top = vim.tbl_filter(function(it) return it.rank == top_rank end, pick)
-            if #top == 1 then return jump(top[1]) end
+            if #top == 1 then return go(top[1]) end
         else
             local project = vim.tbl_filter(function(it) return not jars.is_jar(it.filename) end, items)
             pick = #project > 0 and project or defs.latest_only(items)
         end
         if #pick == 1 then
-            jump(pick[1])
+            go(pick[1])
         else
             require("kotlin-lite.picker").select(defs.rows(pick), {
                 prompt = "Definition: " .. word,
-            }, jump)
+            }, go)
         end
     end)
 end

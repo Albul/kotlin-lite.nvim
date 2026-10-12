@@ -847,6 +847,58 @@ do
 end
 
 -------------------------------------------------------------------
+-- Test 36: gd pushes the tag stack -> <C-t> (:pop) walks back gd by gd
+-------------------------------------------------------------------
+do
+    vim.fn.settagstack(0, { items = {} }, "r")
+    local function wait_buf(pat)
+        return vim.wait(4000, function() return bufname():match(pat) ~= nil end, 20)
+    end
+
+    -- hop 1: Main.kt (Circle) -> Geometry.kt
+    open("Main.kt")
+    local l1 = line_of("Circle(radius)")
+    cursor_on(l1, "Circle")
+    local c1 = vim.api.nvim_win_get_cursor(0)[2]
+    actions.goto_definition()
+    wait_buf("Geometry%.kt$")
+
+    -- noise between hops: <C-o> would have to walk through these, <C-t> must not
+    vim.cmd("normal! G")
+    vim.cmd("normal! gg")
+
+    -- hop 2: inside Geometry.kt, an in-buffer gd (radius -> `val radius`)
+    local l2 = line_of("return PI * radius")
+    cursor_on(l2, "radius")
+    actions.goto_definition()
+
+    local st = vim.fn.gettagstack()
+    check("tagstack: two gd hops recorded", st.length == 2 and st.curidx == 3, vim.inspect(st))
+    check("tagstack: tag names", st.items[1] and st.items[1].tagname == "Circle"
+        and st.items[2] and st.items[2].tagname == "radius")
+
+    vim.cmd("pop") -- <C-t>
+    check("tagstack: 1st <C-t> -> back to the 2nd gd origin",
+        bufname():match("Geometry%.kt$") and cur_line() == l2, ("%s:%d"):format(bufname(), cur_line()))
+    vim.cmd("pop")
+    check("tagstack: 2nd <C-t> -> back to Main.kt, same spot",
+        bufname():match("Main%.kt$") and cur_line() == l1 and vim.api.nvim_win_get_cursor(0)[2] == c1,
+        ("%s:%d"):format(bufname(), cur_line()))
+
+    -- cancelled picker: nothing pushed
+    vim.fn.settagstack(0, { items = {} }, "r")
+    local orig = vim.ui.select
+    local asked = false
+    vim.ui.select = function(_, _, cb) asked = true; cb(nil) end
+    open("defs/imports/user/Bare.kt")
+    cursor_on(line_of("fun bare"), "Dup")
+    actions.goto_definition()
+    vim.wait(4000, function() return asked end, 20)
+    vim.ui.select = orig
+    check("tagstack: cancelled picker pushes nothing", asked and vim.fn.gettagstack().length == 0)
+end
+
+-------------------------------------------------------------------
 io.write("\n")
 if failures == 0 then
     io.write("All checks passed.\n")
