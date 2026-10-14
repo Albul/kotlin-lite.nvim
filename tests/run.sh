@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run the kotlin-lite headless test suite.
+# Run the kotlin-lite busted suite (see tests/README.md); extra args go to busted.
 set -euo pipefail
-here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-exec nvim --headless -u "$here/minimal_init.lua" -l "$here/run.lua"
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+exec nvim -l tests/minit.lua --busted -o utfTerminal "$@"

@@ -1,0 +1,96 @@
+local h = require("helpers")
+local runner = require("kotlin-lite.runner")
+
+local base = h.fixtures .. "/runner"
+
+describe("runner.command_for", function()
+    it("gradle wrapper -> ./gradlew run", function()
+        assert.are.equal("./gradlew run", runner.command_for(base .. "/gradle", "project"))
+    end)
+    it("file scope adds -PmainClass", function()
+        assert.are.equal("./gradlew run -PmainClass=com.x.MainKt",
+            runner.command_for(base .. "/gradle", "file", "com.x.MainKt"))
+    end)
+    it("Makefile fallback -> make run", function()
+        assert.are.equal("make run", runner.command_for(base .. "/make", "project"))
+    end)
+    it("unknown root -> nil", function()
+        assert.is_nil(runner.command_for(base .. "/nope", "project"))
+    end)
+end)
+
+describe("runner.test_command", function()
+    local cmd = runner.test_command(base .. "/gradle", { "test" }, "com.x.FooTest")
+
+    it("uses the gradle wrapper", function()
+        assert.matches("^%./gradlew ", cmd)
+    end)
+    it("plain console + injected init script", function()
+        assert.truthy(cmd:find("--console=plain", 1, true))
+        assert.truthy(cmd:find("--init-script", 1, true))
+    end)
+    it("filters to the class", function()
+        assert.truthy(cmd:find("--tests", 1, true))
+        assert.truthy(cmd:find("com.x.FooTest", 1, true))
+    end)
+    it("joins multi-module specs", function()
+        local mcmd = runner.test_command(base .. "/gradle", { ":app:test", ":core:data:jvmTest" }, nil)
+        assert.truthy(mcmd:find(":app:test :core:data:jvmTest", 1, true))
+    end)
+end)
+
+describe("runner.test_task", function()
+    -- the source set from the file path wins ...
+    it("src/commonTest file -> jvmTest", function()
+        assert.are.equal("jvmTest", runner.test_task(h.fixtures, "/x/core/data/src/commonTest/kotlin/FooTest.kt"))
+    end)
+    it("src/jvmTest file -> jvmTest", function()
+        assert.are.equal("jvmTest", runner.test_task(h.fixtures, "/x/m/src/jvmTest/kotlin/FooTest.kt"))
+    end)
+    it("src/test file -> test", function()
+        assert.are.equal("test", runner.test_task(h.fixtures, "/x/app/src/test/java/FooTest.java"))
+    end)
+    -- ... else the module structure / build script
+    it("plain project -> test", function()
+        assert.are.equal("test", runner.test_task(base .. "/gradle"))
+    end)
+    it("KMP build script (case-insensitive) -> jvmTest", function()
+        assert.are.equal("jvmTest", runner.test_task(base .. "/kmp"))
+    end)
+end)
+
+describe("settings.gradle modules", function()
+    local mm = base .. "/multimodule"
+    local set = {}
+    for _, m in ipairs(runner.modules(mm)) do set[m] = true end
+
+    for _, m in ipairs({ ":app", ":core", ":feature:login" }) do
+        it("finds " .. m, function()
+            assert.is_true(set[m])
+        end)
+    end
+    it("does not pick rootProject.name", function()
+        assert.is_nil(set["demo"])
+    end)
+    it("module_of: file in app/ -> :app", function()
+        assert.are.equal(":app", runner.module_of(mm, mm .. "/app/src/test/kotlin/FooTest.kt"))
+    end)
+    it("module_of: file in the root project -> nil", function()
+        assert.is_nil(runner.module_of(mm, mm .. "/FooTest.kt"))
+    end)
+end)
+
+describe("JUnit XML failures -> quickfix", function()
+    local items = runner.parse_failures(h.fixtures .. "/testresults", nil)
+
+    it("exactly one failed testcase", function()
+        assert.are.equal(1, #items)
+    end)
+    it("names the test and unescapes the message", function()
+        assert.truthy(items[1].text:find("fixtures.SampleTest.fails", 1, true))
+        assert.truthy(items[1].text:find("expected:<1> but was:<2>", 1, true))
+    end)
+    it("keeps the source line", function()
+        assert.is_true(items[1].lnum == 12 or items[1].text:find("SampleTest.kt", 1, true) ~= nil)
+    end)
+end)

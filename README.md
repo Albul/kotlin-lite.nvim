@@ -234,7 +234,7 @@ lua/kotlin-lite/
 ├── picker.lua    -- case-insensitive list picker (snacks, else vim.ui.select)
 └── snacks.lua    -- optional snacks.nvim explorer integration (loaded lazily)
 plugin/kotlin-lite.lua  -- startup bootstrap
-tests/                  -- fixtures + interactive harness + headless checks
+tests/                  -- fixtures, interactive harness, busted specs (*_spec.lua)
 ```
 
 See [`tests/README.md`](tests/README.md) to try it live or run the checks.

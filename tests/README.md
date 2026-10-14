@@ -27,16 +27,30 @@ Then, inside Neovim:
 
 Drop your own `.kt` files into `tests/fixtures/` and navigate around them.
 
-## 2. Automated checks
+## 2. Automated checks (busted)
 
 ```sh
-tests/run.sh
-# or:
-nvim --headless -u tests/minimal_init.lua -l tests/run.lua
+tests/run.sh                          # all specs
+tests/run.sh --filter gri             # tests whose full name matches a Lua pattern
+tests/run.sh tests/impl_spec.lua      # one file
+tests/run.sh --offline                # skip the plugin update check (faster)
+tests/run.sh -o TAP                   # any other busted option / reporter
 ```
 
-`run.lua` drives the real actions (`goto_definition`, `find_usages`) against the
-fixtures and asserts the outcomes. It prints `ok` / `FAIL` per check and exits
-non-zero if anything fails, so it can gate CI.
+`run.sh` runs `nvim -l tests/minit.lua --busted`: [`lazy.minit`][minit]
+installs busted (via hererocks, Lua 5.1) into `./.tests` on the first run,
+loads only this plugin and runs busted over `tests/*_spec.lua` (see `.busted`).
+Exits non-zero on any failure, so it can gate CI.
 
-Requires `rg` (ripgrep) on `PATH`, same as the plugin itself.
+Layout: one spec file per area (`definition_spec.lua`, `impl_spec.lua`,
+`autoimport_spec.lua`, ...), `describe` per feature, `it` per behavior.
+`helpers.lua` holds the shared bits: `open()` a fixture, `cursor_at()`,
+`wait()` for async results, `stub()` / `capture_select()` / `capture_notify()`,
+and `reset()` (use it as `after_each`) to revert stubs and wipe buffers.
+
+Requirements:
+- `rg` (ripgrep) on `PATH`, same as the plugin itself;
+- `git`, `python3` and a C compiler for the one-time hererocks build, plus
+  readline headers (`libreadline-dev` / `readline-devel`).
+
+[minit]: https://github.com/folke/lazy.nvim/blob/main/lua/lazy/minit.lua
