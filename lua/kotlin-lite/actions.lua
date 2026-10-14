@@ -47,6 +47,7 @@ local function jump(it)
     pcall(vim.api.nvim_win_set_cursor, 0, { it.lnum, math.max((it.col or 1) - 1, 0) })
     vim.cmd("normal! zvzz")
 end
+M._jump, M._tag_origin, M._push_tag = jump, tag_origin, push_tag
 
 local package_of = imports.package_of
 
@@ -140,6 +141,13 @@ local function candidates(items, q)
     end
     local project = vim.tbl_filter(function(it) return not jars.is_jar(it.filename) end, items)
     return #project > 0 and project or defs.latest_only(items)
+end
+
+M._lookup, M._candidates = lookup, candidates
+
+-- go to implementation (gri): subtypes / overrides / actuals, see impl.lua
+function M.goto_implementation()
+    require("kotlin-lite.impl").goto_implementation()
 end
 
 function M.goto_definition()
@@ -836,62 +844,8 @@ end
 -------------------------------------------------------------------
 -- auto-import the symbol under the cursor (Alt+Enter)
 -------------------------------------------------------------------
-
--- insert `import <fq>` after the last existing import (or the package line)
-local function insert_import(buf, fq)
-    local import_line = "import " .. fq
-    local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-    local last_import, pkg_line
-    for i, l in ipairs(lines) do
-        if l:match("^%s*import%s+") then
-            if vim.trim(l) == import_line then
-                vim.notify("kotlin-lite: '" .. fq .. "' already imported", vim.log.levels.INFO)
-                return
-            end
-            last_import = i
-        elseif l:match("^%s*package%s+") then
-            pkg_line = i
-        end
-    end
-    local at = last_import or pkg_line or 0
-    vim.api.nvim_buf_set_lines(buf, at, at, false, { import_line })
-    vim.notify("kotlin-lite: added " .. import_line, vim.log.levels.INFO)
-end
-
 function M.auto_import_under_cursor()
-    local word = vim.fn.expand("<cword>")
-    if word == "" or not word:match("^[%a_][%w_]*$") then return end
-
-    local buf = vim.api.nvim_get_current_buf()
-    local pat = [=[\b(class|interface|object|typealias)\s+]=] .. word .. [=[\b]=]
-    local cmd = { "rg", "-l", "--no-messages", "-t", "kotlin", "-e", pat, search.root() }
-
-    vim.system(cmd, { text = true }, function(res)
-        vim.schedule(function()
-            local files = vim.split(res.stdout or "", "\n", { trimempty = true })
-            if #files == 0 then
-                vim.notify("kotlin-lite: no definition found for '" .. word .. "'", vim.log.levels.WARN)
-                return
-            end
-            -- unique candidate imports (a package may host several matching files)
-            local imports, seen = {}, {}
-            for _, f in ipairs(files) do
-                local pkg = package_of(f)
-                local imp = pkg and (pkg .. "." .. word) or word
-                if not seen[imp] then
-                    seen[imp] = true
-                    table.insert(imports, imp)
-                end
-            end
-            if #imports == 1 then
-                insert_import(buf, imports[1])
-            else
-                vim.ui.select(imports, { prompt = "Import " .. word .. ":" }, function(choice)
-                    if choice then insert_import(buf, choice) end
-                end)
-            end
-        end)
-    end)
+    require("kotlin-lite.autoimport").run()
 end
 
 -------------------------------------------------------------------

@@ -10,6 +10,7 @@ or unavailable, and for reading library sources extracted from `*-sources.jar`.
 | Default keymap        | Action                                                                 |
 | --------------------- | ---------------------------------------------------------------------- |
 | `gd`                  | Go to definition — current buffer first (locals, params, lambda params, for-vars, properties, funs, classes), then project-wide + extracted jar sources, ranked like the compiler does from the file header (explicit import → same package → `*` import → default `kotlin.*` imports; `as` aliases resolved) — a single best match is jumped to directly. Multiple hits open a picker with preview: `expect`/`actual` · signature · source set · module or `artifact version` · `file:line` (older versions of the same jar are hidden). On an `import` line it resolves through the full path (incl. nested classes and `as` aliases) and jumps without a picker. Every jump is pushed on the tag stack, so `<C-t>` / `:tags` walk back gd by gd, like with LSP |
+| `gri`                 | Go to implementation — on a type: its subtypes, transitively (incl. anonymous `object : T`); on a `fun`/`val`/`var`: the `override`s inside those subtypes; on an `expect` class or member: its `actual`s. Supertype references are checked against each file's package and imports, so a same-named type from another package doesn't count. One result → jump, several → picker |
 | `K`                   | Hover: declaration + KDoc in a floating window                         |
 | `gK` / `<C-s>` (insert) | Signature of the function whose call the cursor is inside            |
 | `<C-]>` `<C-w>]` `g]` `:tag` `:ptag` `<C-w>}` | Vim's tag commands resolve like `gd` (via `'tagfunc'`, as Neovim does for LSP buffers): jump, open in a split, list all candidates, jump by name, preview without leaving the file |
@@ -23,7 +24,7 @@ or unavailable, and for reading library sources extracted from `*-sources.jar`.
 | `<leader>ka`          | Alternate file: `X.kt` ⇄ `XTest.kt` — searches the module for the `Test`-suffixed counterpart wherever it lives, and offers to scaffold it if absent |
 | `<leader>cf`          | Format the whole buffer via `formatprg` (ktlint by default)            |
 | `<leader>kc`          | Copy the file's fully-qualified name (`package.ClassName`) to the `+` register |
-| `<leader>ki`          | Auto-import the symbol under the cursor (rg for the definition, picker if ambiguous) |
+| `<leader>ki`          | Auto-import the symbol under the cursor from the project + extracted jar sources: classes (incl. nested — `Outer.Nested`), top-level `fun` / `val` / `const val` (incl. extensions — after a `.` only extensions are offered), members of `object`s and companions, enum entries, Java `static` members. Private / class-member / local declarations and names the file already sees (default `kotlin.*` imports, same package, `*` imports) are skipped; several candidates → picker with signature and origin |
 | `<leader>kr`          | Run the current file (needs a top-level `main()`) in a bottom terminal split |
 | `<leader>kR`          | Run the project in a bottom terminal split                             |
 | `<leader>kt`          | Test the current file (`gradle test --tests <FQCN>`)                   |
@@ -92,6 +93,7 @@ require("kotlin-lite").setup({
     },
     keymaps = {
         goto_definition    = "gd",
+        goto_implementation = "gri",
         hover              = "K",
         signature_help     = "gK",
         signature_help_insert = "<C-s>",  -- insert mode
@@ -225,6 +227,7 @@ lua/kotlin-lite/
 ├── search.lua    -- ripgrep + Kotlin decl patterns + in-buffer search
 ├── defs.lua      -- gd picker rows: newest jar version only, expect/actual columns
 ├── imports.lua   -- file header (package/imports) -> candidate ranking for gd / K / gK
+├── impl.lua      -- gri: class header parsing, subtypes / overrides / actuals
 ├── actions.lua   -- gd / K / gK / gr / rename / rename-file / structure / symbols / alternate / fqname / auto-import / format
 ├── runner.lua    -- run + test (bottom terminal, gradle init-script, quickfix)
 ├── keymaps.lua   -- buffer-local + global keymap attachment

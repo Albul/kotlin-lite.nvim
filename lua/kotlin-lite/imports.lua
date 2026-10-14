@@ -14,6 +14,7 @@ local DEFAULT = {
     ["kotlin.sequences"] = true, ["kotlin.text"] = true, ["kotlin.jvm"] = true,
     ["kotlin.js"] = true, ["java.lang"] = true,
 }
+M.DEFAULT = DEFAULT
 
 -- package declared in `file` (reads only the head of the file)
 function M.package_of(file)

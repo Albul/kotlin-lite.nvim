@@ -10,6 +10,18 @@ local tests_dir = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p:h"
 local fixtures = tests_dir .. "/fixtures"
 vim.cmd.cd(fixtures) -- project root for rg = the fixtures dir
 
+-- isolate from the user's extracted jar sources: an empty temp cache and no
+-- auto-extract (set on the defaults too, so config.setup({}) keeps them)
+do
+    local config = require("kotlin-lite.config")
+    local tmp_cache = vim.fn.tempname()
+    for _, o in ipairs({ config.defaults, config.options }) do
+        o.cache_dir = tmp_cache
+        o.auto_extract = false
+    end
+    require("kotlin-lite.jars").scan_cache()
+end
+
 local actions = require("kotlin-lite.actions")
 
 -------------------------------------------------------------------
@@ -139,18 +151,89 @@ do
 end
 
 -------------------------------------------------------------------
--- Test 7: auto-import inserts an import for a class defined elsewhere
+-- Test 7: auto-import -- every importable kind gets its fully qualified path;
+-- class members, locals, private decls and visible names get no import
 -------------------------------------------------------------------
 do
-    open("Main.kt")
-    local usage = line_of("Circle(radius)")
-    cursor_on(usage, "Circle")
+    local autoimport = require("kotlin-lite.autoimport")
+    local orig_notify, orig_select = vim.notify, vim.ui.select
+    local note, picked
+    vim.notify = function(msg) note = msg end
+    vim.ui.select = function(list, o) picked = vim.tbl_map(function(c) return c.fq end, list) end
 
-    actions.auto_import_under_cursor()
-    local added = vim.wait(4000, function()
-        return line_of("import fixtures.Circle") ~= nil
-    end, 40)
-    check("auto_import: adds `import fixtures.Circle`", added)
+    -- run auto-import on `word` (first occurrence in the line containing
+    -- `needle`); -> the added import line, or nil (+ the notification / picker)
+    local function run(needle, word)
+        vim.cmd("edit!")
+        note, picked = nil, nil
+        cursor_on(line_of(needle), word)
+        actions.auto_import_under_cursor()
+        vim.wait(4000, function() return note ~= nil or picked ~= nil end, 20)
+        for _, l in ipairs(vim.api.nvim_buf_get_lines(0, 0, 10, false)) do
+            if l:match("^import ") then return l end
+        end
+        return nil
+    end
+
+    open("autoimport/Use.kt")
+    local expect = {
+        { "Circle(1.0)", "Circle", "fixtures.Circle" },
+        { "aiTopFun(1)", "aiTopFun", "autoimport.lib.aiTopFun" },
+        { "aiShout", "aiShout", "autoimport.lib.aiShout" },
+        { "aiTopVal", "aiTopVal", "autoimport.lib.aiTopVal" },
+        { "AI_TOP_CONST", "AI_TOP_CONST", "autoimport.lib.AI_TOP_CONST" },
+        { "AI_MAX", "AI_MAX", "autoimport.lib.AiConsts.AI_MAX" },
+        { "aiHelper", "aiHelper", "autoimport.lib.AiConsts.aiHelper" },
+        { "AI_ONE", "AI_ONE", "autoimport.lib.AiOneLine.AI_ONE" },
+        { "AiNested", "AiNested", "autoimport.lib.AiOuter.AiNested" },
+        { "AI_COMP", "AI_COMP", "autoimport.lib.AiOuter.Companion.AI_COMP" },
+        { "AI_RED", "AI_RED", "autoimport.lib.AiColor.AI_RED" },
+        { "AI_LARGE", "AI_LARGE", "autoimport.lib.AiSize.AI_LARGE" },
+        { "AI_LIMIT", "AI_LIMIT", "autoimport.lib.AiStatics.AI_LIMIT" },
+        { "aiTwice", "aiTwice", "autoimport.lib.AiStatics.aiTwice" },
+        { "AiInner", "AiInner", "autoimport.lib.AiStatics.AiInner" },
+    }
+    for _, e in ipairs(expect) do
+        local got = run(e[1], e[2])
+        check("auto_import: " .. e[2] .. " -> " .. e[3], got == "import " .. e[3], got or note or vim.inspect(picked))
+    end
+
+    local none = {
+        { "ByteArray(16)", "ByteArray", "default-imported kotlin.ByteArray" },
+        { "aiMember", "aiMember", "class member after a dot" },
+        { "aiHidden", "aiHidden", "private top-level fun" },
+        { "aiLocal", "aiLocal", "local val" },
+        { "aiCtorProp", "aiCtorProp", "ctor property" },
+        { "aiInstance", "aiInstance", "java instance field" },
+    }
+    for _, e in ipairs(none) do
+        local got = run(e[1], e[2])
+        check("auto_import: " .. e[3] .. " -> no import", got == nil and picked == nil, got or vim.inspect(picked))
+    end
+
+    run("aiDup()", "aiDup")
+    check("auto_import: same name in two packages -> picker",
+        vim.deep_equal(picked, { "autoimport.lib.aiDup", "autoimport.other.aiDup" }), vim.inspect(picked))
+    vim.cmd("edit!")
+
+    open("Main.kt")
+    local got = run("Circle(radius)", "Circle")
+    check("auto_import: same package -> no import", got == nil and note:find("same package", 1, true) ~= nil, note)
+    vim.cmd("edit!")
+
+    -- placement: after the package line / at the top, separated by a blank line
+    local buf = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "package p", "", "fun x() = 1" })
+    autoimport.insert(buf, "a.B")
+    check("auto_import: after package + blank line", vim.deep_equal(vim.api.nvim_buf_get_lines(buf, 0, -1, false),
+        { "package p", "", "import a.B", "", "fun x() = 1" }))
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "fun main() {", "}" })
+    autoimport.insert(buf, "a.B")
+    check("auto_import: no package -> top + blank line", vim.deep_equal(vim.api.nvim_buf_get_lines(buf, 0, -1, false),
+        { "import a.B", "", "fun main() {", "}" }))
+    vim.api.nvim_buf_delete(buf, { force = true })
+
+    vim.notify, vim.ui.select = orig_notify, orig_select
 end
 
 -------------------------------------------------------------------
@@ -989,6 +1072,110 @@ do
     open("Main.kt")
     local m = vim.fn.maparg("<C-s>", "i", false, true)
     check("<C-s>: insert-mode signature help, buffer-local", m.buffer == 1 and (m.desc or ""):find("Signature") ~= nil)
+end
+
+-------------------------------------------------------------------
+-- Test 39: gri helpers -- class header parsing, declaration detection
+-------------------------------------------------------------------
+do
+    local impl = require("kotlin-lite.impl")
+    local function supers(text)
+        local h = impl.parse_header(text)
+        return h and table.concat(h.supers, ",") or nil
+    end
+    check("header: plain", supers("class A : B, C {") == "B,C")
+    check("header: ctor + super call + generics", supers("class A<T : X>(val a: Map<K, V>) : B<T>(a), C {") == "B,C")
+    check("header: function types in ctor", supers("class A(val f: (Int) -> Unit) : B {") == "B")
+    check("header: delegation", supers("class A(b: B) : B by b, C {") == "B,C")
+    check("header: annotated private constructor", supers("class A @Inject private constructor(x: Int) : B()") == "B")
+    check("header: qualified super", supers("class A : x.y.B {") == "x.y.B")
+    check("header: where clause", supers("class A<T> : B<T> where T : C {") == "B")
+    check("header: no supertypes", supers("data class A(val x: Int)") == "")
+    local h = impl.parse_header("sealed interface S : B")
+    check("header: kind + mods", h and h.kind == "interface" and h.name == "S" and h.mods.sealed)
+    h = impl.parse_header("val x = object : Runnable {")
+    check("header: anonymous object", h and h.kind == "object" and h.name == nil and h.supers[1] == "Runnable")
+    check("header: fun is not a header", impl.parse_header("fun interfaceOf(): Int") == nil)
+    check("header: fun interface", (impl.parse_header("fun interface F : G {") or {}).name == "F")
+
+    check("declares: fun name, not return type", impl._declares("fun foo(): Flow<Int>", "Flow") == nil
+        and impl._declares("fun foo(): Flow<Int>", "foo") == "member")
+    check("declares: extension fun", impl._declares("fun <T> List<T>.second(): T", "second") == "member")
+    check("declares: val name, not its type", impl._declares("val a: Foo = Foo()", "Foo") == nil
+        and impl._declares("val a: Foo = Foo()", "a") == "member")
+    check("declares: ctor property", impl._declares("    override val name: String,", "name") == "member")
+    check("declares: type header", impl._declares("abstract class Polygon : Shape {", "Polygon") == "type"
+        and impl._declares("abstract class Polygon : Shape {", "Shape") == nil)
+end
+
+-------------------------------------------------------------------
+-- Test 40: gri end to end -- subtypes, overrides, actuals
+-------------------------------------------------------------------
+do
+    local captured, orig = nil, vim.ui.select
+    vim.ui.select = function(list, o) captured = { list = list, opts = o } end
+
+    -- run gri at `needle`/`word` in `file`; returns sorted "dir/File.kt:line" of the results
+    -- (or of the jump target when there is a single one) + whether a picker opened
+    local function gri(file, needle, word)
+        captured = nil
+        open(file)
+        cursor_on(line_of(needle), word)
+        local start = bufname() .. ":" .. cur_line()
+        actions.goto_implementation()
+        vim.wait(5000, function()
+            return captured ~= nil or (bufname() .. ":" .. cur_line()) ~= start
+        end, 20)
+        local out = {}
+        if captured then
+            for _, row in ipairs(captured.list) do
+                out[#out + 1] = row.data.filename:match("([^/]+/[^/]+)$") .. ":" .. row.data.lnum
+            end
+        elseif (bufname() .. ":" .. cur_line()) ~= start then
+            out[1] = bufname():match("([^/]+/[^/]+)$") .. ":" .. cur_line()
+        end
+        table.sort(out)
+        return table.concat(out, " "), captured ~= nil
+    end
+
+    local shape = "impl/shapes/Shape.kt"
+    local got = gri(shape, "interface Shape", "Shape")
+    check("gri: interface -> direct + transitive subtypes, anonymous object, other package",
+        got == "shapes/More.kt:10 shapes/More.kt:19 shapes/More.kt:4 shapes/Shape.kt:13 shapes/Shape.kt:18 shapes/Shape.kt:26 shapes/Shape.kt:8 user/Tri.kt:5", got)
+
+    got = gri(shape, "fun surface(): Double", "surface")
+    check("gri: interface fun -> overrides in subtypes only (not impl.other.Fake)",
+        got == "shapes/More.kt:14 shapes/More.kt:21 shapes/More.kt:6 shapes/Shape.kt:15 shapes/Shape.kt:22 shapes/Shape.kt:27 user/Tri.kt:7", got)
+
+    got = gri(shape, "val name: String", "name")
+    check("gri: interface val -> overrides incl. ctor property",
+        got == "shapes/More.kt:15 shapes/More.kt:22 shapes/More.kt:7 shapes/Shape.kt:10 shapes/Shape.kt:20 shapes/Shape.kt:28", got)
+
+    got = gri(shape, "abstract val sides", "sides")
+    check("gri: abstract val -> overrides across packages", got == "shapes/Shape.kt:14 user/Tri.kt:6", got)
+
+    got = gri("impl/user/Tri.kt", "class Triangle : Polygon", "Polygon")
+    check("gri: from a usage, resolved via import", got == "shapes/Shape.kt:13 user/Tri.kt:5", got)
+
+    vim.fn.settagstack(0, { items = {} }, "r")
+    local picked
+    got, picked = gri("impl/other/Other.kt", "interface Shape", "Shape")
+    check("gri: single implementation -> direct jump, no picker", got == "other/Other.kt:8" and not picked, got)
+    check("gri: jump pushed on the tag stack", vim.fn.gettagstack().length == 1)
+
+    got = gri("defs/shared/src/commonMain/kotlin/KmpClock.kt", "expect class KmpClock", "KmpClock")
+    check("gri: expect class -> actual classes", got == "kotlin/KmpClock.apple.kt:3 kotlin/KmpClock.jvm.kt:3", got)
+
+    got = gri("defs/shared/src/commonMain/kotlin/KmpClock.kt", "fun now", "now")
+    check("gri: member of expect class -> actual members", got == "kotlin/KmpClock.apple.kt:4 kotlin/KmpClock.jvm.kt:4", got)
+
+    got = gri("defs/shared/src/commonMain/kotlin/UseClock.kt", "fun useClock", "KmpClock")
+    check("gri: expect class from a usage", got == "kotlin/KmpClock.apple.kt:3 kotlin/KmpClock.jvm.kt:3", got)
+
+    got = gri(shape, "class Square", "Square")
+    check("gri: final class -> nothing, stays put", got == "", got)
+
+    vim.ui.select = orig
 end
 
 -------------------------------------------------------------------
