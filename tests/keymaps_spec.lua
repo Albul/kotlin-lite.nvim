@@ -76,8 +76,8 @@ describe("global keymaps", function()
             end)
         end
 
-        it("<leader>km (snacks compact toggle) is global from init", function()
-            assert.is_true(global("<leader>km"))
+        it("<leader>km (snacks compact toggle) is not mapped without snacks.nvim", function()
+            assert.are.equal("", vim.fn.maparg("<leader>km", "n"))
         end)
 
         for _, lhs in ipairs({ "<leader>kr", "<leader>ka", "gd", "<leader>cs" }) do

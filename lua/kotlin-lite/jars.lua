@@ -3,14 +3,16 @@
 
 local M = {}
 
--- extracted source trees, refreshed by scan_cache()
+-- extracted source trees, refreshed by scan_cache() (first scan on first use)
 local jar_dirs = {}
+local scanned = false
 
 local function cfg()
     return require("kotlin-lite.config").options
 end
 
 function M.jar_dirs()
+    if not scanned then M.scan_cache() end
     return jar_dirs
 end
 
@@ -22,7 +24,7 @@ end
 
 function M.scan_cache()
     local cache_dir = cfg().cache_dir
-    jar_dirs = {}
+    jar_dirs, scanned = {}, true
     if vim.fn.isdirectory(cache_dir) == 0 then return end
     for name, t in vim.fs.dir(cache_dir) do
         if t == "directory" then
@@ -159,7 +161,7 @@ end
 -- basenames already extracted
 local function extracted_set()
     local done = {}
-    for _, d in ipairs(jar_dirs) do done[M.jar_label(d)] = true end
+    for _, d in ipairs(M.jar_dirs()) do done[M.jar_label(d)] = true end
     return done
 end
 
@@ -209,33 +211,63 @@ function M.pick_sources_jar()
 end
 
 -------------------------------------------------------------------
--- auto-extract essentials on startup
+-- auto-extract essentials (once per session, on the first kotlin buffer /
+-- gradle project; the cache scan itself at most once a day)
 -------------------------------------------------------------------
 
-function M.is_android_project()
-    local root = vim.fn.getcwd()
-    if #vim.fs.find("AndroidManifest.xml", { path = root, type = "file", limit = 1 }) > 0 then
-        return true
-    end
-    for _, f in ipairs({ "build.gradle.kts", "build.gradle", "settings.gradle.kts", "settings.gradle" }) do
-        local ok, lines = pcall(vim.fn.readfile, root .. "/" .. f)
-        if ok then
-            for _, l in ipairs(lines) do
-                if l:find("com.android", 1, true) then return true end
-            end
+local RESCAN_SECONDS = 24 * 60 * 60
+
+local function file_has(path, ...)
+    local ok, lines = pcall(vim.fn.readfile, path)
+    if not ok then return false end
+    for _, l in ipairs(lines) do
+        for _, needle in ipairs({ ... }) do
+            if l:find(needle, 1, true) then return true end
         end
     end
     return false
 end
 
+-- Android plugin applied in the root / a module build script (directly or via
+-- a version-catalog alias), or a module with a main AndroidManifest.xml.
+-- Reads only known files: never walks the tree.
+function M.is_android_project(root)
+    if not root then return false end
+    local dirs = { root }
+    for _, m in ipairs(require("kotlin-lite.runner").modules(root)) do
+        dirs[#dirs + 1] = root .. "/" .. (m:sub(2):gsub(":", "/"))
+    end
+    for _, d in ipairs(dirs) do
+        for _, f in ipairs({ "build.gradle.kts", "build.gradle" }) do
+            if file_has(d .. "/" .. f, "com.android", "android.application", "android.library") then
+                return true
+            end
+        end
+        if vim.fn.filereadable(d .. "/src/main/AndroidManifest.xml") == 1 then return true end
+    end
+    return file_has(root .. "/gradle/libs.versions.toml", "com.android")
+end
+
+-- Was the cache scanned for `key` less than RESCAN_SECONDS ago? Marks it if not.
+local function recently_scanned(key)
+    local stamp = cfg().cache_dir .. "/.auto_extract." .. key
+    local st = vim.uv.fs_stat(stamp)
+    if st and os.time() - st.mtime.sec < RESCAN_SECONDS then return true end
+    vim.fn.mkdir(cfg().cache_dir, "p")
+    vim.fn.writefile({}, stamp)
+    return false
+end
+
 -- Extract (quietly) the newest sources jar for each essential artifact that is
--- present in the cache but not yet extracted.
-function M.auto_extract()
+-- present in the gradle / maven caches but not yet extracted. `root` is the
+-- gradle project root (nil outside one: kotlin + test essentials only).
+function M.auto_extract(root)
     local opts = cfg()
     if not opts.auto_extract then return end
 
     local groups = { opts.essentials.kotlin, opts.essentials.test }
-    if M.is_android_project() then
+    local android = M.is_android_project(root)
+    if android then
         table.insert(groups, opts.essentials.android)
         table.insert(groups, opts.essentials.compose)
     end
@@ -244,6 +276,7 @@ function M.auto_extract()
         for _, a in ipairs(g or {}) do wanted[a] = true end
     end
     if vim.tbl_isempty(wanted) then return end
+    if recently_scanned(android and "android" or "jvm") then return end
 
     find_source_jars(function(jars)
         if not jars or #jars == 0 then return end
@@ -263,7 +296,7 @@ function M.clear()
     vim.notify("kotlin-lite: jar cache cleared", vim.log.levels.INFO)
 end
 
--- mark cache files read-only + initial scan
+-- mark cache files read-only (cheap: no disk access)
 function M.setup()
     vim.api.nvim_create_autocmd("BufReadPost", {
         group = vim.api.nvim_create_augroup("kotlin-lite-jar-ro", { clear = true }),
@@ -274,7 +307,6 @@ function M.setup()
             vim.bo[ev.buf].swapfile = false
         end,
     })
-    M.scan_cache()
 end
 
 return M

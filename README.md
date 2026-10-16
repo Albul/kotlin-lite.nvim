@@ -37,10 +37,12 @@ Commands:
   version of each artifact is listed, extracted ones first.
 - `:KotlinSourcesClear` — clear the extracted jar cache.
 
-On startup the newest cached sources for common libraries (kotlin stdlib,
-coroutines, serialization, test libs; androidx + Compose in Android projects) are
-extracted in the background — customize via `essentials`, disable with
-`auto_extract = false`.
+On the first Kotlin buffer / gradle project of a session the newest cached
+sources for common libraries (kotlin stdlib, coroutines, serialization, test libs;
+androidx + Compose in Android projects) are extracted in the background — the
+gradle / maven caches are searched at most once a day (`:KotlinSourcesClear`
+resets that), plain startups do no disk work. Customize via `essentials`, disable
+with `auto_extract = false`.
 
 ## Requirements
 
@@ -83,7 +85,7 @@ require("kotlin-lite").setup({
     symbols = { icons = { --[[ class/interface/object/companion/fun/field ]] } },
     intellij_keymaps = false,               -- register IntelliJ maps in addition to the vim ones
     snacks_integration = true,              -- optional snacks.nvim explorer (see below)
-    auto_extract = true,                    -- extract essential library sources on startup
+    auto_extract = true,                    -- extract essential library sources (first kotlin buffer)
     project_keymaps = true,                 -- expose project-level maps globally in a gradle project
     tagfunc = true,                         -- <C-]> / :tag / :ptag resolve like gd in kotlin buffers
     -- essentials = { kotlin = {...}, android = {...} }, -- artifact names to auto-extract
