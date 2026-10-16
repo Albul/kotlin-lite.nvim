@@ -15,6 +15,7 @@ local function specs()
         signature_help     = { actions.signature_help,         "Signature (kotlin-lite)" },
         signature_help_insert = { actions.signature_help,      "Signature (kotlin-lite)", "i" },
         find_usages        = { actions.find_usages,            "Usages (kotlin-lite)" },
+        incoming_calls     = { actions.incoming_calls,         "Incoming calls (kotlin-lite)" },
         rename             = { actions.rename,                 "Rename symbol (kotlin-lite)" },
         rename_file        = { actions.rename_file,            "Rename file (kotlin-lite)" },
         format             = { actions.format_buffer,          "Format buffer (kotlin-lite)" },
@@ -96,6 +97,7 @@ function M.attach(buf)
     if opts.intellij_keymaps then
         map("<C-n>", actions.find_files, "Find files (IntelliJ)")
         map("<S-F6>", actions.rename, "Rename symbol (IntelliJ)")
+        map("<C-A-h>", actions.incoming_calls, "Incoming calls (IntelliJ)")
         map("<C-A-l>", actions.format_buffer, "Format (IntelliJ)")
         map("<C-S-t>", actions.alternate_file, "Go to test (IntelliJ)")
         map("<M-CR>", actions.auto_import_under_cursor, "Auto-import (IntelliJ)")

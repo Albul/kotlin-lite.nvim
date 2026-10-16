@@ -100,6 +100,7 @@ M.defaults = {
         signature_help     = "gK",
         signature_help_insert = "<C-s>", -- insert mode, like Neovim's LSP default
         find_usages        = { "gu", "grr" },  -- grr (references) alias
+        incoming_calls     = "<leader>kh",    -- IntelliJ Ctrl+Alt+H
         rename             = { "<leader>cr", "grn" }, -- grn (rename) alias
         rename_file        = "<leader>cR",
         format             = "<leader>cf",

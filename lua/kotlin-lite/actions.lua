@@ -286,6 +286,33 @@ function M.find_usages()
     end, "gu")
 end
 
+-- incoming calls: the usages, each with the function it is in
+function M.incoming_calls()
+    local word = vim.fn.expand("<cword>")
+    if word == "" then return end
+    local scope = require("kotlin-lite.scope")
+    require("kotlin-lite.resolve").run(function(ctx, E)
+        local u = require("kotlin-lite.usages").find(ctx, E)
+        if not u.items then
+            vim.notify("kotlin-lite: " .. (u.err or "no declaration found for '" .. word .. "'"), vim.log.levels.INFO)
+            return
+        end
+        local scans = { [ctx.path] = ctx.sc }
+        local function sc_of(path)
+            if not path:match("%.kts?$") and not path:match("%.java$") then return nil end
+            scans[path] = scans[path] or scope.scan(vim.fn.readfile(path))
+            return scans[path]
+        end
+        local items = require("kotlin-lite.calls").incoming(u.items, u.decl, sc_of)
+        if #items == 0 then
+            vim.notify("kotlin-lite: no calls of '" .. word .. "' found", vim.log.levels.INFO)
+            return
+        end
+        vim.fn.setqflist({}, " ", { title = "Callers: " .. word, items = items })
+        vim.cmd("botright copen 12")
+    end, "incoming calls")
+end
+
 -------------------------------------------------------------------
 -- rename (<leader>cr): word search & replace, scoped to `dir`
 -------------------------------------------------------------------
