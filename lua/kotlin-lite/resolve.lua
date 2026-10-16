@@ -1339,7 +1339,7 @@ local function cheap_root(ctx, r)
     return false
 end
 
-local function type_result(ctx, E, t)
+local function type_lookup(ctx, E, t)
     if t.self then return { jump = t.self, here = t.self.filename == ctx.path } end
     local base = t.path and base_for(ctx, E, t.path) or ctx
     local tctx = M.name_context(base, t.name)
@@ -1354,6 +1354,43 @@ local function type_result(ctx, E, t)
     end
     return project(tctx, t.name, { kind = "type", implicit = {} }, E)
 end
+
+-- `typealias A = B` at `it` -> B as { name, qual, path }; nil for a function type
+local function alias_target(it)
+    local rhs = (it.text or ""):match("%f[%w_]typealias%s+[%w_]+[^=]*=%s*(.*)$")
+    if not rhs or rhs:match("^suspend%f[^%w_]") then return nil end
+    local t = parse_type(rhs)
+    return t and vim.tbl_extend("force", t, { path = it.filename })
+end
+
+-- the type `t` names, through typealiases
+local function type_result(ctx, E, t)
+    local res = type_lookup(ctx, E, t)
+    for _ = 1, MAX_DEPTH do
+        local target = res.jump and alias_target(res.jump)
+        if not target then break end
+        res = type_lookup(ctx, E, target)
+    end
+    return res
+end
+
+--- The type a typealias item stands for, or nil.
+function M.unalias(it, E)
+    local target = alias_target(it)
+    return target and decided(type_result(base_for({}, E, it.filename), E, target))
+end
+
+-- type name -> what it aliases, or nil (a class of this buffer, a project typealias)
+local function alias_of(ctx, E, name)
+    for _, d in ipairs(scope.decls(ctx.sc, name)) do
+        if d.kind == "type" then return alias_target({ text = ctx.sc.lines[d.lnum], filename = ctx.path }) end
+    end
+    for _, it in ipairs(E.run({ "-e", [=[\btypealias\s+]=] .. name .. [=[\b[^=]*=]=] }, { search.root() })) do
+        local t = alias_target(it)
+        if t then return t end
+    end
+end
+
 
 local function header_supers(base, it)
     local impl = require("kotlin-lite.impl")
@@ -1567,6 +1604,17 @@ local function member_in_buffer(ctx, levels)
     return nil
 end
 
+-- `word` as a member of the type `levels` names, when that is a typealias
+local function through_alias(ctx, word, levels, E)
+    local target = #levels[1] == 1 and alias_of(ctx, E, levels[1][1])
+    if not target then return nil end
+    local aliased = { { target.name } }
+    local d = member_in_buffer(ctx, aliased)
+    if d then return { jump = here_item(ctx, d), here = true } end
+    local res = project(ctx, word, { levels = aliased }, E)
+    return res.jump and res or nil
+end
+
 -- on a declaration: `override` -> super member, `actual` -> expect, else
 -- (or opts.stay) itself; nil when not on a declaration
 local function own_decl(ctx, E, opts)
@@ -1648,6 +1696,8 @@ function M.resolve(ctx, E, opts)
         local d = ro.levels and member_in_buffer(ctx, ro.levels)
         if d then return { jump = here_item(ctx, d), here = true } end
         local res = project(ctx, word, ro, E)
+        local aliased = ro.levels and not res.jump and through_alias(ctx, word, ro.levels, E)
+        if aliased then return aliased end
         if ro.levels or res.sole or (opts.depth or 0) >= MAX_DEPTH
             or not cheap_root(ctx, ctx.recv) then
             return res
@@ -1660,6 +1710,8 @@ function M.resolve(ctx, E, opts)
         d = member_in_buffer(ctx, levels)
         if d then return { jump = here_item(ctx, d), here = true } end
         local typed = project(ctx, word, { levels = levels }, E)
+        aliased = not typed.jump and through_alias(ctx, word, levels, E)
+        if aliased then return aliased end
         if typed.err then return res end
         for _, it in ipairs(res.jump and typed.pool or {}) do
             if it.filename == res.jump.filename and it.lnum == res.jump.lnum then return res end

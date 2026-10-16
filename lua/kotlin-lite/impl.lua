@@ -288,12 +288,29 @@ local function extends(cache, path, h, by_name)
     return false
 end
 
+-- `typealias A = T` of type `t` in the project, started at once -> a function
+-- that returns them as types { name, pkg }
+local function typealiases(cache, t, E)
+    local h = E.start({ "-e", [=[\btypealias\s+\w+\s*(<[^=]*>)?\s*=\s*([\w.]+\.)?]=] .. t.name .. [=[\b]=] }, { search.root() })
+    return function()
+        local out = {}
+        for _, it in ipairs(E.await(h)) do
+            local name, ref = it.text:match("typealias%s+([%w_]+)[^=]*=%s*([%w_.]+)")
+            if ref and refers(cache, it.filename, ref, t) then
+                out[#out + 1] = { name = name, pkg = cache.package(it.filename) }
+            end
+        end
+        return out
+    end
+end
+
 -- all subtypes of { name, pkg }, transitively: one rg per hierarchy level, all
 -- of that level's type names in a single alternation.
 -- -> list of { item, header, key = "file:lnum" }
 local function subtypes(cache, root, dirs, E)
     local out, seen_types, seen_hdr = {}, {}, {}
     seen_types[(root.pkg or "") .. "." .. root.name] = true
+    local aliases = typealiases(cache, root, E)
     local level, budget = { root }, MAX_TYPES
     while #level > 0 and budget > 0 do
         budget = budget - #level
@@ -329,6 +346,16 @@ local function subtypes(cache, root, dirs, E)
                     end
                 end
             end
+        end
+        if aliases then
+            for _, a in ipairs(aliases()) do
+                local id = (a.pkg or "") .. "." .. a.name
+                if not seen_types[id] then
+                    seen_types[id] = true
+                    next_level[#next_level + 1] = a
+                end
+            end
+            aliases = nil
         end
         level = next_level
     end
@@ -484,6 +511,7 @@ function M.goto_implementation()
             if err then vim.notify("kotlin-lite: " .. err, vim.log.levels.WARN) end
             return
         end
+        decls = vim.tbl_map(function(d) return resolve.unalias(d, E) or d end, decls)
         local name = decls[1].sym.name
         local cache, dirs, results = new_cache(resolve.reader_of(E)), search.search_dirs(), {}
         for _, d in ipairs(decls) do
