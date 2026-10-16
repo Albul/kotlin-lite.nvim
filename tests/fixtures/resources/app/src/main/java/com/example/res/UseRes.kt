@@ -18,4 +18,5 @@ fun texts(ctx: Context) {
     val sdk = android.R.string.ok
     val maracas = Res.string.maracas
     val logo = Res.drawable.logo
+    val greeting = "a value, not the resource"
 }

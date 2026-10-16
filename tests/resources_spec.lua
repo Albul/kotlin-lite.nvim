@@ -81,6 +81,35 @@ describe("resources", function()
         assert.are.equal(3, h.cur_line())
     end)
 
+    local function usages(needle, name)
+        cursor(needle, name)
+        actions.find_usages()
+        h.wait(function() return #vim.fn.getqflist() > 0 end)
+        return vim.tbl_map(function(it)
+            return vim.fn.fnamemodify(vim.fn.bufname(it.bufnr), ":.") .. ":" .. it.lnum .. ":" .. it.col
+        end, vim.fn.getqflist())
+    end
+
+    it("gu: R.x.y in code and @x/y in xml", function()
+        assert.are.same({
+            USE .. ":7:28",
+            RES .. "layout/screen_main.xml:4:31",
+        }, usages("R.string.greeting", "greeting"))
+    end)
+
+    it("gu: a compose resource", function()
+        assert.are.same({ USE .. ":19:30" }, usages("Res.string.maracas", "maracas"))
+    end)
+
+    it("rename: not for resources", function()
+        local note = h.capture_notify()
+        h.stub(vim.ui, "input", function(_, cb) cb("hello") end)
+        cursor("R.string.greeting", "greeting")
+        actions.rename()
+        h.wait(function() return note.msg ~= nil end)
+        assert.are.equal("kotlin-lite: R.string.greeting is a resource, rename it in the xml", note.msg)
+    end)
+
     it("gri: a resource has no implementations", function()
         local note = h.capture_notify()
         cursor("R.string.greeting", "greeting")

@@ -338,6 +338,10 @@ function M.rename()
         resolve.run(function(ctx, E)
             local u = require("kotlin-lite.usages").find(ctx, E)
             if not u.items then return replace_word(word, new, search.root(), "project, unresolved") end
+            if u.resource then
+                vim.notify("kotlin-lite: " .. u.resource .. " is a resource, rename it in the xml", vim.log.levels.WARN)
+                return
+            end
             if jars.is_jar(u.decl.filename) then
                 vim.notify("kotlin-lite: '" .. word .. "' is declared in a library", vim.log.levels.WARN)
                 return

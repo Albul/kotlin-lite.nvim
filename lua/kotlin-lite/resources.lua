@@ -100,9 +100,36 @@ function M.resolve(ref, E)
     local label = ref.class .. "." .. ref.type .. "." .. ref.name
     local cands = vim.tbl_filter(function(it) return it.default end, items)
     if ref.type == "id" or #cands == 0 then cands = items end
-    if #cands == 1 then return { jump = cands[1], resources = items, label = label } end
+    if #cands == 1 then return { jump = cands[1], resources = items, label = label, ref = ref } end
     for _, it in ipairs(cands) do it.rank = 0 end
-    return { pool = cands, word = label, resources = items, label = label }
+    return { pool = cands, word = label, resources = items, label = label, ref = ref }
+end
+
+-- column of `name` in the hit, if it's spelled the same there
+local function at_name(it, name)
+    local s = it.text:find(name, it.col - it.indent, true)
+    if s then it.col = s + it.indent end
+    it.end_col = it.col + #name
+    return it
+end
+
+--- gu: R.<type>.<name> in Kotlin / Java, @<type>/<name> in Android xml
+function M.usages(ref, E)
+    local root = { search.root() }
+    local code = E.start({ "-e", ("\\b%s\\.%s\\.%s\\b"):format(ref.class, ref.type, ref.name) }, root)
+    local xml
+    if ref.class == "R" then
+        local at = ref.type == "id" and "@\\+?id/" or ("@" .. ref.type .. "/")
+        xml = E.start({
+            "-e", at .. name_re(ref.name) .. "\\b",
+            "-g", "**/res/**/*.xml", "-g", "**/AndroidManifest.xml",
+        }, root)
+    end
+    local out = {}
+    for _, h in ipairs({ code, xml }) do
+        for _, it in ipairs(E.await(h)) do out[#out + 1] = at_name(it, ref.name) end
+    end
+    return out
 end
 
 --- K: the value (or file) per qualifier
