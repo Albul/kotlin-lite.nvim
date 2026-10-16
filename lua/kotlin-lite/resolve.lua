@@ -1631,4 +1631,8 @@ function M.sync(word, at_cursor)
     return M.run_sync(ctx or M.name_context(base, word))
 end
 
+-- building blocks for usages.lua
+M.receiver, M.named_arg, M.declared_type = receiver, named_arg, type_of_decl
+M.is_local, M.decided = is_local, decided
+
 return M

@@ -15,8 +15,8 @@ or unavailable, and for reading library sources extracted from `*-sources.jar`.
 | `K`                   | Hover: declaration + KDoc in a floating window — of what `gd` resolves to (locals and parameters from the buffer, unsaved edits included; of several candidates, the best-ranked) |
 | `gK` / `<C-s>` (insert) | Signature of the call the cursor is inside (or on), resolved like `gd` — the overload that takes the call's arguments — with the current argument's parameter highlighted (positional or named) |
 | `<C-]>` `<C-w>]` `g]` `:tag` `:ptag` `<C-w>}` | Vim's tag commands resolve like `gd` (via `'tagfunc'`, as Neovim does for LSP buffers): jump, open in a split, list all candidates, jump by name, preview without leaving the file |
-| `gu` / `grr`          | Find usages → quickfix panel at the bottom (mentions in comments / KDoc skipped) |
-| `<leader>cr`          | Rename symbol: project-wide word search & replace with confirmation    |
+| `gu` / `grr`          | Find usages of what the cursor resolves to → quickfix panel at the bottom. A local / parameter: its scope only (plus named arguments at calls of its fun); `private`: its file; `internal`: its module. Occurrences are dropped when a local shadows the name, when a file doesn't see a top-level declaration (package / imports), when the receiver's type (constructed, `Type.`, a typed local) is outside the member's class and its subtypes, and in comments / strings. Unresolved names: every mention outside comments |
+| `<leader>cr`          | Rename what the cursor resolves to, at exactly those usages: a local in the buffer (no prompt), anything else across files with confirmation (files saved); library declarations are refused |
 | `<leader>cR`          | Rename file; for a same-named top-level `class`/`interface`/`object`/`fun` it offers a module-scoped symbol rename |
 | `<leader>cs`          | File structure outline — top-level decls & class members (incl. private/protected/internal, marked with a UML sigil), with kind icons (IntelliJ `Ctrl+F12`) |
 | `<leader>cS`          | Go to symbol — live-search picker over top-level classes/objects/interfaces/enums & functions (IntelliJ `Ctrl+N`) |
@@ -234,6 +234,7 @@ lua/kotlin-lite/
 │                    named args, overloads, owner classes, ranking, declaration types;
 │                    each result carries its symbol (kind, owners, package, visibility, expect/actual)
 ├── reader.lua    -- file reads for one request, shared by resolve and impl
+├── usages.lua    -- gu / rename: the occurrences that mean the resolved declaration
 ├── defs.lua      -- gd picker rows: newest jar version only, expect/actual columns
 ├── imports.lua   -- file header (package/imports) -> candidate ranking for gd / K / gK
 ├── impl.lua      -- gri: class header parsing, subtypes / overrides / actuals of a resolved symbol

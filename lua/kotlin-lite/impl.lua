@@ -423,6 +423,16 @@ function M.find(decl, cache, dirs, E)
     return results
 end
 
+--- Names of `root` ({ name, pkg }) and its project subtypes.
+function M.type_family(root, E)
+    local cache = new_cache(require("kotlin-lite.resolve").reader_of(E))
+    local set = { [root.name] = true }
+    for _, t in ipairs(subtypes(cache, root, { search.root() }, E)) do
+        if t.header.name then set[t.header.name] = true end
+    end
+    return set
+end
+
 local function dedupe(items)
     local seen, out = {}, {}
     for _, it in ipairs(items) do

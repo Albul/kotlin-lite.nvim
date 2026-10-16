@@ -235,19 +235,26 @@ end
 -------------------------------------------------------------------
 -- find usages (gr) -> quickfix at the bottom
 -------------------------------------------------------------------
+local function show_usages(word, items)
+    if #items == 0 then
+        vim.notify("kotlin-lite: no usages of '" .. word .. "' found", vim.log.levels.INFO)
+        return
+    end
+    vim.fn.setqflist({}, " ", { title = "Usages: " .. word, items = items })
+    vim.cmd("botright copen 12")
+end
+
+-- unresolved: every mention outside comments
 function M.find_usages()
     local word = vim.fn.expand("<cword>")
     if word == "" then return end
-    search.rg({ "-w", "-e", word }, { search.root() }, function(items)
-        -- mentions in comments / KDoc are not usages
-        items = vim.tbl_filter(function(it) return not search.is_comment_text(it.text) end, items)
-        if #items == 0 then
-            vim.notify("kotlin-lite: no usages of '" .. word .. "' found", vim.log.levels.INFO)
-            return
-        end
-        vim.fn.setqflist({}, " ", { title = "Usages: " .. word, items = items })
-        vim.cmd("botright copen 12")
-    end)
+    local resolve = require("kotlin-lite.resolve")
+    resolve.run(function(ctx, E)
+        local u = require("kotlin-lite.usages").find(ctx, E)
+        if u.items then return show_usages(word, u.items) end
+        local items = E.run({ "-w", "-e", word }, { search.root() })
+        show_usages(word, vim.tbl_filter(function(it) return not search.is_comment_text(it.text) end, items))
+    end, "gu")
 end
 
 -------------------------------------------------------------------
@@ -279,6 +286,25 @@ local function replace_word(word, new, dir, scope_label)
     end)
 end
 
+local function apply_rename(items, new, save)
+    local by_file = {}
+    for _, it in ipairs(items) do
+        by_file[it.filename] = by_file[it.filename] or {}
+        table.insert(by_file[it.filename], it)
+    end
+    for path, list in pairs(by_file) do
+        local b = vim.fn.bufadd(path)
+        vim.fn.bufload(b)
+        table.sort(list, function(a, c) return a.lnum > c.lnum or (a.lnum == c.lnum and a.col > c.col) end)
+        for _, it in ipairs(list) do
+            vim.api.nvim_buf_set_text(b, it.lnum - 1, it.col - 1, it.lnum - 1, it.end_col - 1, { new })
+        end
+        if save then vim.api.nvim_buf_call(b, function() vim.cmd("silent update") end) end
+    end
+    return vim.tbl_count(by_file)
+end
+
+-- a local in place; anything else confirmed and saved
 function M.rename()
     local word = vim.fn.expand("<cword>")
     if word == "" then return end
@@ -288,7 +314,23 @@ function M.rename()
             vim.notify("kotlin-lite: '" .. new .. "' is not a valid identifier", vim.log.levels.ERROR)
             return
         end
-        replace_word(word, new, search.root(), "project")
+        local resolve = require("kotlin-lite.resolve")
+        resolve.run(function(ctx, E)
+            local u = require("kotlin-lite.usages").find(ctx, E)
+            if not u.items then return replace_word(word, new, search.root(), "project, unresolved") end
+            if jars.is_jar(u.decl.filename) then
+                vim.notify("kotlin-lite: '" .. word .. "' is declared in a library", vim.log.levels.WARN)
+                return
+            end
+            if u.here_only then return apply_rename(u.items, new, false) end
+            local files = {}
+            for _, it in ipairs(u.items) do files[it.filename] = true end
+            local msg = ("Rename %d occurrences of '%s' -> '%s' in %d files?")
+                :format(#u.items, word, new, vim.tbl_count(files))
+            if vim.fn.confirm(msg, "&Yes\n&No", 2) ~= 1 then return end
+            local n = apply_rename(u.items, new, true)
+            vim.notify(("kotlin-lite: renamed in %d files"):format(n), vim.log.levels.INFO)
+        end, "rename")
     end)
 end
 
