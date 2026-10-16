@@ -17,6 +17,7 @@ or unavailable, and for reading library sources extracted from `*-sources.jar`.
 | `gK` / `<C-s>` (insert) | Signature of the call the cursor is inside (or on), resolved like `gd` — the overload that takes the call's arguments — with the current argument's parameter highlighted (positional or named) |
 | `<C-]>` `<C-w>]` `g]` `:tag` `:ptag` `<C-w>}` | Vim's tag commands resolve like `gd` (via `'tagfunc'`, as Neovim does for LSP buffers): jump, open in a split, list all candidates, jump by name, preview without leaving the file |
 | `gu` / `grr`          | Find usages of what the cursor resolves to → quickfix panel at the bottom. A local / parameter: its scope only (plus named arguments at calls of its fun); `private`: its file; `internal`: its module. Occurrences are dropped when a local shadows the name, when a file doesn't see a top-level declaration (package / imports), when the receiver's type (constructed, `Type.`, a typed local) is outside the member's class and its subtypes, and in comments / strings. A resource (`R.string.x`): every `R.string.x` in code and `@string/x` in Android xml; `BuildConfig.X`, `libs.x`, `projects.x`: their uses. Unresolved names: every mention outside comments |
+| `]r` / `[r`           | Next / previous occurrence of the symbol under the cursor — the ones highlighted on `CursorHold` (same scope rules), with a count, wrapping around per `'wrapscan'` |
 | `<leader>kh`          | Incoming calls (IntelliJ `Ctrl+Alt+H`) — the usages `gu` finds, each named after the function or property it is in (`Counter.bump`, `Counter.Companion.zero`, `main`), in the quickfix panel; imports and the declaration itself are left out |
 | `<leader>cr`          | Rename what the cursor resolves to, at exactly those usages: a local in the buffer (no prompt), anything else across files with confirmation (files saved); library declarations are refused |
 | `<leader>cR`          | Rename file; for a same-named top-level `class`/`interface`/`object`/`fun` it offers a module-scoped symbol rename |
@@ -108,6 +109,8 @@ require("kotlin-lite").setup({
         signature_help_insert = "<C-s>",  -- insert mode
         find_usages        = { "gu", "grr" },
         incoming_calls     = "<leader>kh",
+        next_reference     = "]r",
+        prev_reference     = "[r",
         rename             = "<leader>cr",
         rename_file        = "<leader>cR",
         format             = "<leader>cf",

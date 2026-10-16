@@ -22,13 +22,12 @@ local function key_of(d)
     return d and scope.key(d.lnum, d.col)
 end
 
-function M.refresh(buf)
-    buf = buf == 0 and vim.api.nvim_get_current_buf() or buf
-    vim.api.nvim_buf_clear_namespace(buf, M.ns, 0, -1)
+--- occurrences of the symbol under the cursor: { lnum, s, e, decl }, in order
+local function occurrences(buf)
     local cur = vim.api.nvim_win_get_cursor(0)
     local base = base_of(buf)
     local ctx = resolve.context_at(base, cur[1], cur[2])
-    if not ctx or not ctx.code or ctx.s > cur[2] or scope.KEYWORDS[ctx.word] then return end
+    if not ctx or not ctx.code or ctx.s > cur[2] or scope.KEYWORDS[ctx.word] then return {} end
     local sc, word = base.sc, ctx.word
 
     local decls = scope.decls(sc, word)
@@ -40,6 +39,7 @@ function M.refresh(buf)
     -- a member / top-level decl: its unqualified uses and every `x.word`
     local wide = not lambda and (not target or not resolve.is_local(sc, target))
 
+    local out = {}
     local pat = "%f[%w_]" .. vim.pesc(word) .. "%f[^%w_]"
     for l, m in ipairs(sc.mask) do
         local i = 1
@@ -58,13 +58,46 @@ function M.refresh(buf)
                 keep = key_of(v) == key_of(target) or (wide and not target and not v)
             end
             if keep then
-                local d = target and p == key_of(target)
-                vim.api.nvim_buf_set_extmark(buf, M.ns, l - 1, s - 1, {
-                    end_col = e, hl_group = d and "LspReferenceWrite" or "LspReferenceText",
-                })
+                out[#out + 1] = { lnum = l, s = s - 1, e = e, decl = target and p == key_of(target) }
             end
         end
     end
+    return out
+end
+
+local function show(buf, occ)
+    vim.api.nvim_buf_clear_namespace(buf, M.ns, 0, -1)
+    for _, o in ipairs(occ) do
+        vim.api.nvim_buf_set_extmark(buf, M.ns, o.lnum - 1, o.s, {
+            end_col = o.e, hl_group = o.decl and "LspReferenceWrite" or "LspReferenceText",
+        })
+    end
+end
+
+function M.refresh(buf)
+    buf = buf == 0 and vim.api.nvim_get_current_buf() or buf
+    show(buf, occurrences(buf))
+end
+
+--- ]r / [r: to the `count`th next (negative: previous) occurrence
+function M.jump(count)
+    local buf = vim.api.nvim_get_current_buf()
+    local occ = occurrences(buf)
+    if #occ == 0 then return end
+    local cur = vim.api.nvim_win_get_cursor(0)
+    local here = 1
+    for i, o in ipairs(occ) do
+        if o.lnum == cur[1] and o.s <= cur[2] and cur[2] < o.e then here = i end
+    end
+    local to = here + count
+    if vim.o.wrapscan then
+        to = (to - 1) % #occ + 1
+    else
+        to = math.max(1, math.min(#occ, to))
+    end
+    vim.cmd("normal! m'")
+    vim.api.nvim_win_set_cursor(0, { occ[to].lnum, occ[to].s })
+    show(buf, occ)
 end
 
 function M.attach(buf)

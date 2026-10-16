@@ -50,3 +50,52 @@ describe("reference highlight", function()
         assert.are.same({}, vim.api.nvim_buf_get_extmarks(0, highlight.ns, 0, -1, {}))
     end)
 end)
+
+describe("]r / [r (next / previous occurrence)", function()
+    after_each(function()
+        vim.o.wrapscan = true
+        h.reset()
+    end)
+
+    local function jump(needle, word, count, nth)
+        h.open(SCOPED)
+        h.cursor_at(needle, word, nth)
+        highlight.jump(count)
+        local cur = vim.api.nvim_win_get_cursor(0)
+        return cur[1] .. ":" .. cur[2]
+    end
+
+    it("next", function()
+        assert.are.equal("13:15", jump("val count = 1", "count", 1))
+    end)
+
+    it("a count skips", function()
+        assert.are.equal("30:16", jump("val count = 1", "count", 2))
+    end)
+
+    it("previous wraps around", function()
+        assert.are.equal("50:33", jump("val count = 1", "count", -1))
+    end)
+
+    it("stays at the end without 'wrapscan'", function()
+        vim.o.wrapscan = false
+        assert.are.equal("50:33", jump("count is ${count}", "count", 1, 2))
+    end)
+
+    it("a local: within its scope", function()
+        assert.are.equal("21:12", jump("println(count) // outer", "count", 1))
+    end)
+
+    it("from inside the word", function()
+        h.open(SCOPED)
+        h.cursor_at("return count", "count")
+        vim.cmd("normal! ll")
+        highlight.jump(1)
+        assert.are.same({ 30, 16 }, vim.api.nvim_win_get_cursor(0))
+    end)
+
+    it("highlights at once", function()
+        jump("val count = 1", "count", 1)
+        assert.are.equal(5, #vim.api.nvim_buf_get_extmarks(0, highlight.ns, 0, -1, {}))
+    end)
+end)

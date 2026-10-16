@@ -16,6 +16,8 @@ local function specs()
         signature_help_insert = { actions.signature_help,      "Signature (kotlin-lite)", "i" },
         find_usages        = { actions.find_usages,            "Usages (kotlin-lite)" },
         incoming_calls     = { actions.incoming_calls,         "Incoming calls (kotlin-lite)" },
+        next_reference     = { function() require("kotlin-lite.highlight").jump(vim.v.count1) end, "Next reference (kotlin-lite)" },
+        prev_reference     = { function() require("kotlin-lite.highlight").jump(-vim.v.count1) end, "Previous reference (kotlin-lite)" },
         rename             = { actions.rename,                 "Rename symbol (kotlin-lite)" },
         rename_file        = { actions.rename_file,            "Rename file (kotlin-lite)" },
         format             = { actions.format_buffer,          "Format buffer (kotlin-lite)" },

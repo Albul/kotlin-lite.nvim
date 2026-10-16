@@ -18,7 +18,7 @@ describe("keymaps in a kotlin buffer", function()
         assert.is_true(vim.b.kotlin_lite_attached)
     end)
 
-    for _, lhs in ipairs({ "gd", "gu", "grr", "<leader>kh", "<leader>ks", "<leader>kt" }) do
+    for _, lhs in ipairs({ "gd", "gu", "grr", "]r", "[r", "<leader>kh", "<leader>ks", "<leader>kt" }) do
         it(lhs .. " is buffer-local", function()
             assert.is_true(buffer_local(lhs))
         end)
