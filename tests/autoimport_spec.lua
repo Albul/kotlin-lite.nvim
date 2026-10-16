@@ -14,15 +14,25 @@ describe("auto-import", function()
     end)
     after_each(h.reset)
 
+    local function import_lines()
+        local out = {}
+        for _, l in ipairs(vim.api.nvim_buf_get_lines(0, 0, 10, false)) do
+            if l:match("^import ") then out[l] = true end
+        end
+        return out
+    end
+
     -- run auto-import on `word` in the first line containing `needle`;
     -- -> the added import line, or nil (then see `note` / `picked`)
     local function run(file, needle, word)
         h.open(file)
+        local before = import_lines()
         h.cursor_at(needle, word)
+        local tick = vim.b.changedtick
         actions.auto_import_under_cursor()
-        h.wait(function() return note ~= nil or picked ~= nil end)
-        for _, l in ipairs(vim.api.nvim_buf_get_lines(0, 0, 10, false)) do
-            if l:match("^import ") then return l end
+        h.wait(function() return note ~= nil or picked ~= nil or vim.b.changedtick ~= tick end)
+        for l in pairs(import_lines()) do
+            if not before[l] then return l end
         end
     end
 
@@ -69,10 +79,20 @@ describe("auto-import", function()
             end)
         end
 
+        it("a member inherited from a supertype", function()
+            assert.is_nil(run("autoimport/UseBase.kt", "// inherited member", "aiShared"))
+            assert.is_nil(picked)
+            assert.truthy(note:find("member of AiBase", 1, true), note)
+        end)
+
         it("a class in the same package", function()
             assert.is_nil(run("Main.kt", "Circle(radius)", "Circle"))
             assert.truthy(note:find("same package", 1, true))
         end)
+    end)
+
+    it("the same name outside the class: imported", function()
+        assert.are.equal("import autoimport.shared.aiShared", run("autoimport/UseBase.kt", "// not a member here", "aiShared"))
     end)
 
     it("same name in two packages -> picker", function()

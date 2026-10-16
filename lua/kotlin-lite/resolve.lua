@@ -936,6 +936,7 @@ local function decide(ctx, word, opts, hits, read, headers, final)
         -- receiver types (or implicit ones) before anything top level
         local keep = by_owner(pool, opts.levels or { implicit }, headers, opts.levels ~= nil)
         if keep then
+            for _, c in ipairs(keep) do c.item.member_of = c.chain[1] and c.chain[1].name or c.ext end
             o.filtered = true
             return finish(ctx, word, keep, o, read)
         end
@@ -1338,6 +1339,44 @@ local function type_result(ctx, E, t)
         end
     end
     return project(tctx, t.name, { kind = "type", implicit = {} }, E)
+end
+
+local function header_supers(base, it)
+    local impl = require("kotlin-lite.impl")
+    local text = impl.header_text(base.sc.lines, it.lnum)
+    if it.filename:sub(-5) == ".java" then return java_supers(text) end
+    local h = impl.parse_header(text)
+    return vim.tbl_map(last_seg, h and h.supers or {})
+end
+
+--- Go to super: a type's supertypes, the member an override overrides.
+function M.super_at(ctx, E)
+    local res = M.resolve(ctx, E, { stay = true })
+    if res.err then return res end
+    local it = decided(res)
+    local s = it and it.sym
+    if not s then return { err = "'" .. ctx.word .. "' is ambiguous" } end
+    local base = base_for(ctx, E, it.filename)
+    if s.kind == "type" then
+        local items = {}
+        for _, n in ipairs(header_supers(base, it)) do
+            local d = decided(type_result(ctx, E, { name = n, path = it.filename }))
+            if d then items[#items + 1] = d end
+        end
+        if #items == 0 then return { err = "no supertype of '" .. s.name .. "' found" } end
+        if #items == 1 then return { jump = items[1], here = items[1].filename == ctx.path } end
+        return { pool = items, word = s.name }
+    end
+    if (s.kind == "fun" or s.kind == "prop") and s.owners[1] then
+        local o = decided(type_result(ctx, E, { name = s.owners[1].name, path = it.filename }))
+        local supers = o and header_supers(base_for(ctx, E, o.filename), o) or {}
+        if #supers > 0 then
+            local r = project(M.name_context(base, s.name), s.name, { levels = { supers }, strict = true }, E)
+            if r.jump then r.here = r.jump.filename == ctx.path end
+            if not r.err then return r end
+        end
+    end
+    return { err = "no super declaration of '" .. s.name .. "' found" }
 end
 
 --- grt

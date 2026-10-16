@@ -47,6 +47,17 @@ describe("file structure outline", function()
         end)
     end)
 
+    describe("StructureTricky.kt (braces in comments / strings)", function()
+        it("nests by real braces only", function()
+            local items = {}
+            h.open("StructureTricky.kt")
+            for _, it in ipairs(actions._scan_symbols(vim.api.nvim_buf_get_lines(0, 0, -1, false))) do
+                items[#items + 1] = it.name .. "@" .. it.depth
+            end
+            assert.are.same({ "Tricky@0", "raw@1", "esc@1", "inside@1", "after@0" }, items)
+        end)
+    end)
+
     describe("Cycle.kt (multi-line ctor + secondary ctors)", function()
         local s
         before_each(function() s = outline("Cycle.kt") end)

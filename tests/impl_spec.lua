@@ -151,3 +151,43 @@ describe("gri", function()
         assert.are.equal(1, vim.fn.gettagstack().length)
     end)
 end)
+
+describe("go to super", function()
+    after_each(h.reset)
+
+    local PAINT = "impl/painters/Painters.kt"
+
+    -- on `word` of line `lnum` -> line of the jump ("" if none), the message
+    local function super(lnum, word)
+        local cap, note = h.capture_select(), h.capture_notify()
+        h.open(PAINT)
+        h.cursor_on(lnum, word)
+        local pos = vim.api.nvim_win_get_cursor(0)
+        actions.goto_super()
+        h.wait(function()
+            return cap.list ~= nil or note.msg ~= nil or not vim.deep_equal(vim.api.nvim_win_get_cursor(0), pos)
+        end)
+        assert.is_nil(cap.list)
+        return note.msg and "" or tostring(h.cur_line()), note.msg
+    end
+
+    -- { name, line, word, line of the super }
+    local cases = {
+        { "override -> the member it overrides", 8, "paint", "4" },
+        { "override of an override -> the nearest", 12, "paint", "8" },
+        { "class -> its supertype", 11, "FineBrush", "7" },
+        { "class implementing an interface", 24, "Brick", "19" },
+    }
+    for _, c in ipairs(cases) do
+        local name, lnum, word, want = unpack(c)
+        it(name, function()
+            assert.are.equal(want, (super(lnum, word)))
+        end)
+    end
+
+    it("no supertype: says so", function()
+        local got, msg = super(3, "Painter")
+        assert.are.equal("", got)
+        assert.truthy((msg or ""):find("Painter", 1, true), msg)
+    end)
+end)

@@ -10,6 +10,7 @@ local function specs()
         goto_definition    = { actions.goto_definition,        "Definition (kotlin-lite)" },
         goto_type_definition = { actions.goto_type_definition, "Type definition (kotlin-lite)" },
         goto_implementation = { actions.goto_implementation,   "Implementations (kotlin-lite)" },
+        goto_super         = { actions.goto_super,             "Super declaration (kotlin-lite)" },
         hover              = { actions.hover,                   "Hover (kotlin-lite)" },
         signature_help     = { actions.signature_help,         "Signature (kotlin-lite)" },
         signature_help_insert = { actions.signature_help,      "Signature (kotlin-lite)", "i" },

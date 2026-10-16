@@ -264,13 +264,33 @@ end
 -- entry point
 -------------------------------------------------------------------
 
+-- why the word needs no import (member in reach, decl of this file), or nil
+local function in_reach(ctx, E)
+    local res = require("kotlin-lite.resolve").resolve(ctx, E)
+    if res.here then return "declared in this file" end
+    if res.jump and res.jump.member_of then return "a member of " .. res.jump.member_of end
+    return nil
+end
+
 function M.run()
     local word = vim.fn.expand("<cword>")
     if word == "" or not word:match("^[%a_][%w_]*$") then return end
-    local buf = vim.api.nvim_get_current_buf()
     local line = vim.api.nvim_get_current_line()
     local col = vim.api.nvim_win_get_cursor(0)[2]
-    local member = dotted(line, word_start(line, col))
+    if dotted(line, word_start(line, col)) then return M.search(word, true) end
+    require("kotlin-lite.resolve").run(function(ctx, E)
+        local why = in_reach(ctx, E)
+        if why then
+            vim.notify("kotlin-lite: '" .. word .. "' is " .. why .. ", no import needed", vim.log.levels.INFO)
+            return
+        end
+        M.search(word, false)
+    end, "auto-import")
+end
+
+-- `member`: after a dot, extensions only
+function M.search(word, member)
+    local buf = vim.api.nvim_get_current_buf()
     local ctx = imports.current()
 
     if not member then

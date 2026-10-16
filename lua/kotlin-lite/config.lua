@@ -95,6 +95,7 @@ M.defaults = {
         goto_definition    = "gd",
         goto_type_definition = "grt",
         goto_implementation = "gri",           -- subtypes / overrides / actuals
+        goto_super         = "<leader>ku",    -- IntelliJ Ctrl+U
         hover              = "K",
         signature_help     = "gK",
         signature_help_insert = "<C-s>", -- insert mode, like Neovim's LSP default

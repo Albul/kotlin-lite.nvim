@@ -101,6 +101,14 @@ function M.goto_definition()
     require("kotlin-lite.resolve").at_cursor(function(res) go_to(res, origin, "Definition") end)
 end
 
+function M.goto_super()
+    local word = vim.fn.expand("<cword>")
+    if word == "" then return end
+    local origin = tag_origin(word)
+    local resolve = require("kotlin-lite.resolve")
+    resolve.run(function(ctx, E) go_to(resolve.super_at(ctx, E), origin, "Super") end, "go to super")
+end
+
 function M.goto_type_definition()
     local word = vim.fn.expand("<cword>")
     if word == "" then return end
@@ -437,11 +445,6 @@ local MODIFIERS = {
     companion = true, actual = true, expect = true,
 }
 
--- drop line comments and string contents so their braces/parens don't count
-local function code_only(line)
-    return (line:gsub("//.*$", ""):gsub('"[^"]*"', '""'):gsub("'[^']*'", "''"))
-end
-
 -- consume leading modifier words; return the modifier set and the remainder
 local function split_modifiers(s)
     local mods = {}
@@ -522,11 +525,11 @@ local function detect_decl(raw)
     return nil
 end
 
--- val/var properties declared in a class's primary constructor (with visibility)
+-- val/var properties of a primary constructor; `lines` masked
 local function ctor_props(lines, start_lnum)
     local code, depth, started, endl = {}, 0, false, start_lnum
     for i = start_lnum, math.min(#lines, start_lnum + 30) do
-        local c = code_only(lines[i])
+        local c = lines[i]
         code[#code + 1] = c
         for ch in c:gmatch("[()]") do
             if ch == "(" then depth = depth + 1; started = true else depth = depth - 1 end
@@ -564,6 +567,7 @@ end
 -- so multi-line constructor/parameter lists don't leak in. `pending` carries a
 -- declaration's body kind to its `{`, which may be lines away (multi-line ctor).
 local function scan_symbols(lines)
+    lines = require("kotlin-lite.scope").mask(lines)
     local items, scopes = {}, {} -- scopes: stack of "type"|"block"
     local paren, pending = 0, nil
 
@@ -596,9 +600,8 @@ local function scan_symbols(lines)
             end
         end
 
-        local code = code_only(raw)
-        for i = 1, #code do
-            local c = code:sub(i, i)
+        for i = 1, #raw do
+            local c = raw:sub(i, i)
             if c == "(" then
                 paren = paren + 1
             elseif c == ")" then
@@ -773,6 +776,24 @@ end
 -------------------------------------------------------------------
 -- copy fully-qualified name (package + file name) to the + register
 -------------------------------------------------------------------
+-- nil for a local / unresolved symbol
+local function symbol_fqname()
+    local resolve = require("kotlin-lite.resolve")
+    local cur = vim.api.nvim_win_get_cursor(0)
+    local ctx = resolve.context_at(resolve.base(0), cur[1], cur[2])
+    if not ctx or not ctx.code or ctx.s > cur[2] or require("kotlin-lite.scope").KEYWORDS[ctx.word] then
+        return nil
+    end
+    local it = resolve.decided(resolve.run_sync(ctx, { stay = true }))
+    local s = it and it.sym
+    if not s or s.kind == "local" or s.kind == "param" then return nil end
+    local parts = { s.pkg }
+    for i = #s.owners, 1, -1 do parts[#parts + 1] = s.owners[i].name end
+    parts[#parts + 1] = s.name
+    return table.concat(parts, ".")
+end
+
+-- the symbol under the cursor, else the file
 function M.copy_fqname()
     local name = vim.fn.expand("%:t:r")
     if name == "" then
@@ -784,7 +805,7 @@ function M.copy_fqname()
         pkg = l:match("^%s*package%s+([%w_.]+)")
         if pkg then break end
     end
-    local fq = pkg and (pkg .. "." .. name) or name
+    local fq = symbol_fqname() or (pkg and (pkg .. "." .. name) or name)
     vim.fn.setreg("+", fq)
     vim.notify("kotlin-lite: copied " .. fq, vim.log.levels.INFO)
     return fq

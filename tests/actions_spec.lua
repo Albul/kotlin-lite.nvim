@@ -24,6 +24,22 @@ describe("copy_fqname", function()
         h.open("Main.kt")
         assert.are.equal("fixtures.Main", actions.copy_fqname())
     end)
+
+    local cases = {
+        { "member through its receiver", "gd/dsl/UseDsl.kt", "// apply on pen", "stroke", "gd.dsl.Pen.stroke" },
+        { "class declared here", "gd/dsl/Dsl.kt", "class Pen", "Pen", "gd.dsl.Pen" },
+        { "top-level fun", "gd/dsl/UseDsl.kt", "canvas {", "canvas", "gd.dsl.canvas" },
+        { "a local: the file", "gd/dsl/UseDsl.kt", "p.apply", "p", "gd.dsl.UseDsl" },
+    }
+    for _, c in ipairs(cases) do
+        local name, file, needle, word, want = unpack(c)
+        it("symbol under the cursor: " .. name, function()
+            h.open(file)
+            h.cursor_at(needle, word)
+            assert.are.equal(want, actions.copy_fqname())
+            assert.are.equal(want, vim.fn.getreg("+"))
+        end)
+    end
 end)
 
 describe("rename_file", function()
