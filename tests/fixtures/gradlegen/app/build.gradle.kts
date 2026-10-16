@@ -19,7 +19,7 @@ android {
 
 dependencies {
     implementation(libs.androidx.core.ktx)
-    implementation(libs.kotlinJvm)
+    implementation(libs.kotlin.jvm)
     implementation(libs.bundles.ui)
     implementation(projects.coreUi)
     println(libs.versions.kotlin.get())

@@ -349,8 +349,8 @@ function M.rename()
             if not u.items then return replace_word(word, new, search.root(), "project, unresolved") end
             local g = u.generated
             if g then
-                vim.notify(("kotlin-lite: %s is %s, rename it in %s"):format(g.label, g.source.kind, g.source.home),
-                    vim.log.levels.WARN)
+                local msg = ("kotlin-lite: %s is %s, rename it in %s"):format(g.label, g.source.kind, g.home or g.source.home)
+                vim.notify(msg, vim.log.levels.WARN)
                 return
             end
             if jars.is_jar(u.decl.filename) then

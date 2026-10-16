@@ -4,7 +4,7 @@ core = "1.15.0"
 
 [libraries]
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "core" }
-kotlinJvm = { module = "org.example:kotlin-jvm-lib", version = "1.0" }
+kotlin-jvm = { module = "org.example:kotlin-jvm", version = "1.0" }
 
 [bundles]
 ui = ["androidx-core-ktx"]
