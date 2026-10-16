@@ -333,3 +333,58 @@ describe("K", function()
         assert.truthy((note.msg or ""):find("nowhereToBeFound", 1, true))
     end)
 end)
+
+describe("gK (signature help)", function()
+    after_each(h.reset)
+
+    local DSL = "gd/dsl/UseDsl.kt"
+
+    -- gK with the cursor on the `nth` `at` of the line with `needle` ->
+    -- float lines, the highlighted (active parameter) text
+    local function sig(needle, at, nth)
+        local shown, fbuf
+        h.stub(vim.lsp.util, "open_floating_preview", function(lines)
+            shown = lines
+            fbuf = vim.api.nvim_create_buf(false, true)
+            vim.api.nvim_buf_set_lines(fbuf, 0, -1, false, lines)
+            return fbuf, 0
+        end)
+        h.open(DSL)
+        h.cursor_at(needle, at, nth)
+        actions.signature_help()
+        h.wait(function() return shown ~= nil end)
+        assert.is_not_nil(shown, "no float")
+        local active
+        for _, m in ipairs(vim.api.nvim_buf_get_extmarks(fbuf, -1, 0, -1, { details = true })) do
+            local row, col, d = m[2], m[3], m[4]
+            active = vim.api.nvim_buf_get_lines(fbuf, row, row + 1, false)[1]:sub(col + 1, d.end_col)
+        end
+        return shown, active
+    end
+
+    local cases = {
+        { "overload by argument count, 2nd argument", "blend(1, 2)", "2", 1,
+            "fun blend(a: Int, b: Int, c: Int = 0) {}", "b: Int" },
+        { "one argument", "blend(1) // one arg", "1", 1, "fun blend(a: Int) {}", "a: Int" },
+        { "named argument picks the parameter", "draw(y = 1", '"x"', 1,
+            "fun draw(y: Int, tint: String, alpha: Float) {}", "tint: String" },
+        { "member through the receiver", "stroke(3)", "3", 1,
+            "fun stroke(width: Int, dash: Boolean = false) {}", "width: Int" },
+        { "on the callee name itself", "blend(1, 2)", "blend", 1,
+            "fun blend(a: Int, b: Int, c: Int = 0) {}", "a: Int" },
+    }
+    for _, c in ipairs(cases) do
+        local name, needle, at, nth, first, want = unpack(c)
+        it(name, function()
+            local shown, active = sig(needle, at, nth)
+            assert.are.equal(first, vim.trim(shown[1]))
+            assert.are.equal(want, active)
+        end)
+    end
+
+    it("multi-line parameter list: the active line", function()
+        local shown, active = sig("pen(tint", "tint")
+        assert.are.equal("fun pen(", vim.trim(shown[1]))
+        assert.are.equal('tint: String = "black"', active)
+    end)
+end)

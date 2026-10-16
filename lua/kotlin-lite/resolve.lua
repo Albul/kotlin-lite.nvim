@@ -683,6 +683,84 @@ local function by_platform(ctx, items, best)
     return pick
 end
 
+--- Params of the fun at (lnum, col) -> { name, lnum, s, e } (first line of each)
+function M.param_spans(lines, lnum, col)
+    local m = scope.mask(vim.list_slice(lines, lnum, lnum + 30))
+    local out, depth, cur, pending = {}, 0, nil, false
+    local function finish(l, e)
+        if cur then
+            local stop = cur.l == l and e or #m[cur.l]
+            local text = lines[lnum + cur.l - 1]:sub(cur.s + 1, stop):gsub("%s+$", "")
+            local flat = m[cur.l]:sub(cur.s + 1, stop):gsub("%b()", ""):gsub("%b<>", "")
+            out[#out + 1] = {
+                name = flat:match("([%w_]+)%s*:") or flat:match("([%w_]+)%s*$"),
+                lnum = lnum + cur.l - 1, s = cur.s, e = cur.s + #text,
+            }
+        end
+        cur, pending = nil, false
+    end
+    for l, line in ipairs(m) do
+        for i = l == 1 and col + 1 or 1, #line do
+            local c = line:sub(i, i)
+            if pending and not cur and c:match("%S") and c ~= ")" then cur = { l = l, s = i - 1 } end
+            if c == "(" or c == "[" or c == "{" or c == "<" then
+                depth = depth + 1
+                if depth == 1 then pending = c == "(" end
+            elseif c == ")" or c == "]" or c == "}" or (c == ">" and line:sub(i - 1, i - 1) ~= "-") then
+                if depth == 1 and c == ")" then
+                    finish(l, i - 1)
+                    return out
+                end
+                depth = depth - 1
+            elseif c == "," and depth == 1 then
+                finish(l, i - 1)
+                pending = true
+            end
+        end
+    end
+    return out
+end
+
+--- The call around (or at the callee) (lnum, col) -> { ctx (callee), index, name? }
+function M.call_at(base, lnum, col)
+    local sc = base.sc
+    local here = M.context_at(base, lnum, col)
+    if here and here.code and here.call and here.s <= col and col < here.e then
+        return { ctx = here, index = 0 }
+    end
+    local p = scope.key(lnum, col)
+    local groups = vim.tbl_filter(function(g) return g.open < p and p <= g.close end, sc.parens)
+    table.sort(groups, function(a, b) return a.open > b.open end)
+    for _, g in ipairs(groups) do
+        local gl, gc = scope.unkey(g.open)
+        local head = (sc.mask[gl]:sub(1, gc):gsub("%s*%b<>%s*$", ""))
+        local cs, callee = head:match("()([%a_][%w_]*)%s*$")
+        if callee and not NOT_CALLEE[callee] then
+            local index, depth, arg = 0, 0, {}
+            for l = gl, lnum do
+                local line = sc.mask[l]
+                local from, to = l == gl and gc + 2 or 1, l == lnum and col or #line
+                for i = from, to do
+                    local c = line:sub(i, i)
+                    if c:match("[%(%[{]") then
+                        depth = depth + 1
+                    elseif c:match("[%)%]}]") then
+                        depth = depth - 1
+                    elseif c == "," and depth == 0 then
+                        index, arg = index + 1, {}
+                    elseif depth == 0 then
+                        arg[#arg + 1] = c
+                    end
+                end
+                arg[#arg + 1] = " "
+            end
+            local name = table.concat(arg):match("^%s*([%a_][%w_]*)%s*=[^=]")
+            return { ctx = M.context_at(base, gl, cs - 1), index = index, name = name }
+        end
+    end
+    return nil
+end
+
 -- params of the fun declared at (lnum, col) -> { default, vararg, fn, lambda_ok }
 local function decl_params(lines, lnum, col)
     local text = table.concat(scope.mask(vim.list_slice(lines, lnum, lnum + 30)), "\n")
@@ -1508,10 +1586,12 @@ function M.resolve(ctx, E, opts)
     return res
 end
 
---- fn(ctx, E) in a coroutine for the word under the cursor, E = async engine.
-function M.run(fn, what)
-    local cur = vim.api.nvim_win_get_cursor(0)
-    local ctx = M.context_at(M.base(vim.api.nvim_get_current_buf()), cur[1], cur[2])
+--- fn(ctx, E) in a coroutine (ctx: default at the cursor; E: async engine)
+function M.run(fn, what, ctx)
+    if not ctx then
+        local cur = vim.api.nvim_win_get_cursor(0)
+        ctx = M.context_at(M.base(vim.api.nvim_get_current_buf()), cur[1], cur[2])
+    end
     if not ctx then return end
     local E = search.engine(true)
     local co = coroutine.create(function()

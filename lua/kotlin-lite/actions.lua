@@ -159,7 +159,7 @@ local function doc_block(lines, lnum)
     end
     local block = {}
     for i = s, e do table.insert(block, lines[i]) end
-    return block
+    return block, s
 end
 
 -- `lines`: the file's text when at hand (a buffer's)
@@ -195,20 +195,41 @@ function M.hover()
     end, "K")
 end
 
+local SIG_NS = vim.api.nvim_create_namespace("kotlin-lite-signature")
+
+-- signature of the call around the cursor, active parameter highlighted
 function M.signature_help()
-    local pos = vim.fn.searchpairpos("(", "", ")", "bnW")
-    if pos[1] == 0 then return M.hover() end
-    local before = vim.fn.getline(pos[1]):sub(1, pos[2] - 1)
-    local name = before:match("([%w_]+)%s*$")
-    if not name then return M.hover() end
-    local args = { "-e", [=[\bfun\s+(<[^>]*>\s+)?([\w.<>?,\s]+\.)?]=] .. name .. [=[\s*[(<]]=] }
-    search.rg(args, search.search_dirs(), function(items)
-        if #items == 0 then
-            vim.notify("kotlin-lite: no signature found for '" .. name .. "'", vim.log.levels.WARN)
-            return
+    local resolve = require("kotlin-lite.resolve")
+    local buf = vim.api.nvim_get_current_buf()
+    local cur = vim.api.nvim_win_get_cursor(0)
+    local call = resolve.call_at(resolve.base(buf), cur[1], cur[2])
+    if not call or not call.ctx then return M.hover() end
+    resolve.run(function(ctx, E)
+        local res = resolve.resolve(ctx, E)
+        if res.err then return notify_err(res) end
+        local it = res.jump or defs.rows(res.pool)[1].data
+        local lines = it.filename == ctx.path and ctx.sc.lines or vim.fn.readfile(it.filename)
+        if not lines[it.lnum] then return end
+        local block, first = doc_block(lines, it.lnum)
+        local spans = resolve.param_spans(lines, it.lnum, (it.col or 1) - 1)
+        local active
+        for i, sp in ipairs(spans) do
+            if (call.name and sp.name == call.name) or (not call.name and i == call.index + 1) then active = sp end
         end
-        show_float(best(items, name))
-    end)
+        table.insert(block, "")
+        table.insert(block, "-- " .. display(it))
+        local fbuf = vim.lsp.util.open_floating_preview(block, "kotlin", {
+            border = "rounded",
+            max_width = 100,
+            max_height = 30,
+            focus_id = "kotlin-lite-signature",
+        })
+        if active and fbuf and active.lnum >= first and active.lnum < first + #block then
+            vim.api.nvim_buf_set_extmark(fbuf, SIG_NS, active.lnum - first, active.s, {
+                end_col = active.e, hl_group = "LspSignatureActiveParameter",
+            })
+        end
+    end, "gK", call.ctx)
 end
 
 -------------------------------------------------------------------
