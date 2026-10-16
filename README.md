@@ -89,6 +89,8 @@ require("kotlin-lite").setup({
     auto_extract = true,                    -- extract essential library sources (first kotlin buffer)
     project_keymaps = true,                 -- expose project-level maps globally in a gradle project
     tagfunc = true,                         -- <C-]> / :tag / :ptag resolve like gd in kotlin buffers
+    highlight_references = true,            -- on CursorHold, highlight the symbol's occurrences (by scope)
+    textobjects = false,                    -- af / if (fun), ac / ic (class / object) text objects
     -- essentials = { kotlin = {...}, android = {...} }, -- artifact names to auto-extract
     run = {
         height = 15,                        -- bottom terminal split height
@@ -235,6 +237,8 @@ lua/kotlin-lite/
 │                    each result carries its symbol (kind, owners, package, visibility, expect/actual)
 ├── reader.lua    -- file reads for one request, shared by resolve and impl
 ├── usages.lua    -- gu / rename: the occurrences that mean the resolved declaration
+├── highlight.lua -- occurrences of the symbol under the cursor, highlighted on CursorHold
+├── textobj.lua   -- af / if / ac / ic from scope blocks
 ├── defs.lua      -- gd picker rows: newest jar version only, expect/actual columns
 ├── imports.lua   -- file header (package/imports) -> candidate ranking for gd / K / gK
 ├── impl.lua      -- gri: class header parsing, subtypes / overrides / actuals of a resolved symbol

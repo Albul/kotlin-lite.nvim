@@ -39,6 +39,10 @@ M.defaults = {
     -- set 'tagfunc' in kotlin buffers: <C-]>, <C-w>], g], :tag, :ptag resolve
     -- like gd (as Neovim does for LSP buffers)
     tagfunc = true,
+    -- on CursorHold, highlight the occurrences of the symbol under the cursor
+    highlight_references = true,
+    -- af / if (fun), ac / ic (class / object) text objects
+    textobjects = false,
     -- also register IntelliJ-style keymaps on top of the vim ones
     intellij_keymaps = false,
     -- optional snacks.nvim explorer integration (compact middle packages etc.)

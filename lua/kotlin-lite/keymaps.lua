@@ -80,6 +80,9 @@ function M.attach(buf)
         end
     end
 
+    if opts.highlight_references then require("kotlin-lite.highlight").attach(buf) end
+    if opts.textobjects then require("kotlin-lite.textobj").attach(buf) end
+
     if opts.tagfunc then
         vim.bo[buf].tagfunc = "v:lua.require'kotlin-lite.actions'.tagfunc"
     end

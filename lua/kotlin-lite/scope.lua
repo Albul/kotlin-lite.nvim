@@ -3,6 +3,15 @@
 
 local M = {}
 
+M.KEYWORDS = {}
+for w in ([[package import class interface object fun val var typealias constructor init
+    if else when for while do try catch finally return break continue throw is in as
+    this super null true false by where get set companion data enum sealed open abstract
+    override private protected internal public lateinit const inline suspend operator
+    infix vararg noinline crossinline reified expect actual inner value annotation out]]):gmatch("%S+") do
+    M.KEYWORDS[w] = true
+end
+
 -- position key: (line, 0-based col) as one comparable number
 local BIG = 1e6
 local function key(l, c) return l * BIG + c end
