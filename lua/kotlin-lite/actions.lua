@@ -170,15 +170,15 @@ local function doc_block(lines, lnum)
     return block, s
 end
 
--- `lines`: the file's text when at hand (a buffer's)
-local function show_float(it, lines)
+-- `lines`: the file's text when at hand (a buffer's); `head`: lines above
+local function show_float(it, lines, head)
     if not lines then
         local ok, read = pcall(vim.fn.readfile, it.filename)
         if not ok then return end
         lines = read
     end
     if not lines[it.lnum] then return end
-    local block = doc_block(lines, it.lnum)
+    local block = vim.list_extend(head or {}, (doc_block(lines, it.lnum)))
     table.insert(block, "")
     table.insert(block, "-- " .. display(it))
     vim.lsp.util.open_floating_preview(block, "kotlin", {
@@ -192,7 +192,9 @@ end
 -- what gd resolves to; of several, the best-ranked
 function M.hover()
     local buf = vim.api.nvim_get_current_buf()
-    require("kotlin-lite.resolve").at_cursor(function(res)
+    local resolve = require("kotlin-lite.resolve")
+    resolve.run(function(ctx, E)
+        local res = resolve.resolve(ctx, E)
         if res.err then return notify_err(res) end
         if res.resources then
             return vim.lsp.util.open_floating_preview(require("kotlin-lite.resources").hover_lines(res), "", {
@@ -204,7 +206,12 @@ function M.hover()
         if res.here and vim.api.nvim_buf_is_valid(buf) then
             lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
         end
-        show_float(it, lines)
+        local head
+        if it.lambda then
+            local t = resolve.it_type(ctx, E, it.lambda)
+            head = { t and ("it: " .. t.name) or "it", "" }
+        end
+        show_float(it, lines, head)
     end, "K")
 end
 
@@ -310,7 +317,7 @@ local function apply_rename(items, new, save)
         vim.fn.bufload(b)
         table.sort(list, function(a, c) return a.lnum > c.lnum or (a.lnum == c.lnum and a.col > c.col) end)
         for _, it in ipairs(list) do
-            vim.api.nvim_buf_set_text(b, it.lnum - 1, it.col - 1, it.lnum - 1, it.end_col - 1, { new })
+            vim.api.nvim_buf_set_text(b, it.lnum - 1, it.col - 1, it.lnum - 1, it.end_col - 1, { it.insert or new })
         end
         if save then vim.api.nvim_buf_call(b, function() vim.cmd("silent update") end) end
     end
@@ -334,6 +341,13 @@ function M.rename()
             if jars.is_jar(u.decl.filename) then
                 vim.notify("kotlin-lite: '" .. word .. "' is declared in a library", vim.log.levels.WARN)
                 return
+            end
+            if u.decl.lambda then
+                local brace = u.decl.col + 1
+                table.insert(u.items, {
+                    filename = u.decl.filename, lnum = u.decl.lnum, col = brace, end_col = brace,
+                    insert = " " .. new .. " ->",
+                })
             end
             if u.here_only then return apply_rename(u.items, new, false) end
             local files = {}

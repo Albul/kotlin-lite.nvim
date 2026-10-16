@@ -104,6 +104,19 @@ local function local_usages(ctx, E, decl, word, out)
     end
 end
 
+-- `it`: the occurrences its lambda declares
+local function it_usages(ctx, lambda)
+    local out = {}
+    for l = scope.unkey(lambda.open), math.min(#ctx.sc.lines, (scope.unkey(lambda.close))) do
+        for _, c in ipairs(occurrences(ctx.sc, "it", l)) do
+            if not resolve.receiver(ctx.sc, l, c) and resolve.it_lambda(ctx.sc, scope.key(l, c)) == lambda then
+                out[#out + 1] = qf_item(ctx.path, ctx.sc, l, c, "it")
+            end
+        end
+    end
+    return out
+end
+
 -- does the occurrence at (l, c) of `sc` (file `path`) mean `sym`?
 local function means(S, path, sc, l, c)
     local sym, word = S.sym, S.sym.name
@@ -171,6 +184,9 @@ function M.find(ctx, E)
     local decl = resolve.decided(res)
     if not decl or not decl.sym then return { unresolved = true } end
     local sym, word = decl.sym, decl.sym.name
+    if decl.lambda then
+        return { items = it_usages(ctx, decl.lambda), sym = sym, decl = decl, here_only = true }
+    end
     local out = {}
 
     if sym.range and decl.filename == ctx.path then

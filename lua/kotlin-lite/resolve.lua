@@ -32,6 +32,15 @@ for _, n in ipairs({
     RECEIVERLESS[n] = true
 end
 
+-- lambdas that get `this` instead of `it`
+local WITH_RECEIVER = {}
+for _, n in ipairs({ "apply", "run", "with", "runCatching", "buildString", "buildList", "buildMap", "buildSet" }) do
+    WITH_RECEIVER[n] = true
+end
+
+-- `it` is the receiver itself, not an element of it
+local IT_IS_RECEIVER = { let = true, also = true, takeIf = true, takeUnless = true, use = true }
+
 -- words before `(` that are not a callee
 local NOT_CALLEE = {
     ["if"] = true, ["when"] = true, ["for"] = true, ["while"] = true, ["catch"] = true,
@@ -1179,12 +1188,14 @@ local function literal_type(s)
     return "Int"
 end
 
--- `a.b.Foo<X>?` -> { name = "Foo", qual = "a.b" }; nil for a function type
+-- `a.b.Foo<X>?` -> { name = "Foo", qual = "a.b", arg = "X" }; nil for a function type
 local function parse_type(s)
     local t = s:match("^%s*([%a_][%w_.]*)")
     if not t then return nil end
     local qual, name = t:match("^(.*)%.([%w_]+)$")
-    return { name = name or t, qual = qual }
+    local args = s:match("^%s*[%a_][%w_.]*%s*(%b<>)")
+    local arg = args and args:sub(2, -2):gsub("^%s*out%s+", ""):gsub("^%s*in%s+", ""):match("^%s*([%a_][%w_.]*)")
+    return { name = name or t, qual = qual, arg = last_seg(arg) }
 end
 
 -- last identifier of the chain `a.b(x).c<T>()!!` at (l, c) -> { lnum, col, word, call }
@@ -1386,7 +1397,12 @@ function M.type_at(ctx, E)
     if res.err then return res end
     local it = decided(res)
     if not it then return { err = "'" .. ctx.word .. "' is ambiguous" } end
-    local t = it.sym and type_of(ctx, E, it, 0)
+    local t
+    if it.lambda then
+        t = M.it_type(ctx, E, it.lambda)
+    elseif it.sym then
+        t = type_of(ctx, E, it, 0)
+    end
     if not t then return { err = "no type known for '" .. ctx.word .. "'" } end
     return type_result(ctx, E, t)
 end
@@ -1472,6 +1488,49 @@ local function lambda_receiver(ctx, b, E)
         end
     end
     return nil
+end
+
+-- `{ a, b -> ...`
+local function names_params(sc, b)
+    local l, c = scope.unkey(b.open)
+    local rest = sc.mask[l]:sub(c + 2)
+    if rest:match("^%s*$") then rest = sc.mask[l + 1] or "" end
+    return rest:match("^%s*[%w_%s,:<>?.()]*%->") ~= nil
+end
+
+--- The lambda whose implicit `it` is at `p`: the innermost one that has
+--- `it`, preferring the known ones (forEach, let, ...) over unknown callees.
+function M.it_lambda(sc, p)
+    local unknown
+    for _, b in ipairs(scope.enclosing(sc, p)) do
+        if b.kind == "fun" or b.kind == "type" then break end
+        if b.kind == "lambda" and not WITH_RECEIVER[b.callee or ""] and not names_params(sc, b) then
+            if RECEIVERLESS[b.callee or ""] then return b end
+            unknown = unknown or b
+        end
+    end
+    return unknown
+end
+
+local function it_item(ctx, b)
+    local l, c = scope.unkey(b.open)
+    local sym = new_sym("it", "param", {}, "")
+    sym.range = { from = b.open, to = b.close }
+    return { filename = ctx.path, lnum = l, col = c + 1, text = vim.trim(ctx.sc.lines[l]), sym = sym, lambda = b }
+end
+
+--- Type of `it` in lambda `b`: the receiver of let / also / ..., the
+--- element type of the collection for forEach / map / ...
+function M.it_type(ctx, E, b)
+    local l, c, name = ident_before(ctx.sc, scope.unkey(b.open))
+    local cctx = name and M.context_at(ctx, l, c)
+    local r = cctx and cctx.recv
+    if not r then return nil end
+    local t = r.ctor and { name = r.segs[1] } or receiver_type(cctx, r, E, 0)
+    if t and t.self then t = { name = t.self.sym.name } end
+    if not t or IT_IS_RECEIVER[name] then return t end
+    if t.name:match("Map$") or not t.arg then return nil end
+    return { name = t.arg, path = t.path }
 end
 
 -- start the callee search of lambda `b` early, in case it's needed
@@ -1605,6 +1664,8 @@ function M.resolve(ctx, E, opts)
     if own then return own end
     local d = search.decl_in_buffer(word, ctx.sc, ctx.lnum, ctx.s)
     if d then return { jump = here_item(ctx, d), here = true } end
+    local lambda = word == "it" and ctx.code and M.it_lambda(ctx.sc, ctx.pos)
+    if lambda then return { jump = it_item(ctx, lambda), here = true } end
     local implicit, open, lambdas = implicit_receivers(ctx)
     local explicit = ctx.hdr.explicit[word]
     if explicit then

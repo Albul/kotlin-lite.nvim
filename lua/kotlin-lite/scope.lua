@@ -164,7 +164,9 @@ local function classify_block(b)
         end
         return
     end
-    if head:find("%f[%w_]fun%f[^%w_]") or head:match("^%s*init%s*$")
+    local after_fun = head:match("%f[%w_]fun%f[^%w_](.*)$")
+    local expression_body = after_fun and after_fun:gsub("%b()", ""):find("=", 1, true)
+    if (after_fun and not expression_body) or head:match("^%s*init%s*$")
         or head:find("%f[%w_]constructor%f[^%w_]") or head:find("%f[%w_][gs]et%s*%b()%s*$") then
         b.kind = "fun"
         local sig = head:match("%f[%w_]fun%s+(.-)%s*%(")

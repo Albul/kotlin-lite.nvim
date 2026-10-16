@@ -36,8 +36,9 @@ function M.refresh(buf)
     if not ctx.recv then
         target = scope.visible(decls, ctx.pos, nil)
     end
+    local lambda = word == "it" and not target and not ctx.recv and resolve.it_lambda(sc, ctx.pos)
     -- a member / top-level decl: its unqualified uses and every `x.word`
-    local wide = not target or not resolve.is_local(sc, target)
+    local wide = not lambda and (not target or not resolve.is_local(sc, target))
 
     local pat = "%f[%w_]" .. vim.pesc(word) .. "%f[^%w_]"
     for l, m in ipairs(sc.mask) do
@@ -50,6 +51,8 @@ function M.refresh(buf)
             local keep
             if resolve.receiver(sc, l, s - 1) then
                 keep = wide
+            elseif lambda then
+                keep = resolve.it_lambda(sc, p) == lambda
             else
                 local v = scope.visible(decls, p, nil)
                 keep = key_of(v) == key_of(target) or (wide and not target and not v)
