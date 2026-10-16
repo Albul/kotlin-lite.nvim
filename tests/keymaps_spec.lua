@@ -24,7 +24,7 @@ describe("keymaps in a kotlin buffer", function()
         end)
     end
 
-    local aliases = { grn = "rename", grt = "definition", gra = "auto-import", gO = "file structure" }
+    local aliases = { grn = "rename", grt = "type definition", gra = "auto-import", gO = "file structure" }
     for lhs, what in pairs(aliases) do
         it(lhs .. " alias (" .. what .. ") is buffer-local", function()
             assert.is_true(buffer_local(lhs))

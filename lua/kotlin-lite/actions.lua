@@ -76,30 +76,37 @@ local function notify_err(res)
     vim.notify("kotlin-lite: " .. res.err, res.level or vim.log.levels.WARN)
 end
 
-function M.goto_definition()
-    local word = vim.fn.expand("<cword>")
-    if word == "" then return end
-    local origin = tag_origin(word)
+local function go_to(res, origin, prompt)
     local function go(it)
         push_tag(origin)
         jump(it)
     end
+    if res.err then return notify_err(res) end
+    if res.here then
+        -- same buffer: no :edit, keep the view
+        push_tag(origin)
+        vim.cmd("normal! m'")
+        vim.api.nvim_win_set_cursor(0, { res.jump.lnum, res.jump.col - 1 })
+        vim.cmd("normal! zv")
+        return
+    end
+    if res.jump then return go(res.jump) end
+    require("kotlin-lite.picker").select(defs.rows(res.pool), { prompt = prompt .. ": " .. res.word }, go)
+end
 
-    require("kotlin-lite.resolve").at_cursor(function(res)
-        if res.err then return notify_err(res) end
-        if res.here then
-            -- same buffer: no :edit, keep the view
-            push_tag(origin)
-            vim.cmd("normal! m'")
-            vim.api.nvim_win_set_cursor(0, { res.jump.lnum, res.jump.col - 1 })
-            vim.cmd("normal! zv")
-            return
-        end
-        if res.jump then return go(res.jump) end
-        require("kotlin-lite.picker").select(defs.rows(res.pool), {
-            prompt = "Definition: " .. res.word,
-        }, go)
-    end)
+function M.goto_definition()
+    local word = vim.fn.expand("<cword>")
+    if word == "" then return end
+    local origin = tag_origin(word)
+    require("kotlin-lite.resolve").at_cursor(function(res) go_to(res, origin, "Definition") end)
+end
+
+function M.goto_type_definition()
+    local word = vim.fn.expand("<cword>")
+    if word == "" then return end
+    local origin = tag_origin(word)
+    local resolve = require("kotlin-lite.resolve")
+    resolve.run(function(ctx, E) go_to(resolve.type_at(ctx, E), origin, "Type") end, "grt")
 end
 
 -------------------------------------------------------------------

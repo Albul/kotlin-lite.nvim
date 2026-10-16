@@ -103,7 +103,7 @@ local function word_at(line, col)
 end
 
 -- receiver of `.word` / `?.word` / `::word`, nil without one:
--- { kind = this|super|unknown|chain, label?, segs?, lnum?, col?, ctor? }
+-- { kind = this|super|unknown|chain|call, label?, segs?, lnum?, col?, ctor? }
 local function receiver(sc, lnum, s)
     local before = sc.mask[lnum]:sub(1, s)
     local rest = before:match("^(.-)%??%.%s*$")
@@ -128,11 +128,12 @@ local function receiver(sc, lnum, s)
             elseif c == "(" then
                 depth = depth - 1
                 if depth == 0 then
-                    local callee = (rest:sub(1, i - 1):gsub("%s*%b<>%s*$", "")):match("([%w_]+)%s*$")
-                    if callee and callee:match("^%u") then
+                    local cs, callee = (rest:sub(1, i - 1):gsub("%s*%b<>%s*$", "")):match("()([%a_][%w_]*)%s*$")
+                    if not callee then return { kind = "unknown" } end
+                    if callee:match("^%u") then
                         return { kind = "chain", segs = { callee }, ctor = true }
                     end
-                    return { kind = "unknown" }
+                    return { kind = "call", lnum = l, col = cs - 1 }
                 end
             end
         end
@@ -261,10 +262,12 @@ end
 
 --- Context of the identifier at (lnum, 0-based col).
 function M.context_at(base, lnum, col)
+    base = base.base or base
     local line = base.sc.lines[lnum] or ""
     local s, word, e = word_at(line, col)
     if not s then return nil end
-    local ctx = setmetatable({ lnum = lnum, s = s, e = e, word = word, line = line }, { __index = base })
+    local ctx = setmetatable({ lnum = lnum, s = s, e = e, word = word, line = line, base = base },
+        { __index = base })
     ctx.pos = scope.key(lnum, s)
     local m = base.sc.mask[lnum] or ""
     ctx.code = m:sub(s + 1, e) == word -- false in a comment / string
@@ -280,7 +283,8 @@ end
 
 --- Context of a bare name (`:tag Name`): no position.
 function M.name_context(base, word)
-    return setmetatable({ word = word, line = "" }, { __index = base })
+    base = base.base or base
+    return setmetatable({ word = word, line = "", base = base }, { __index = base })
 end
 
 -------------------------------------------------------------------
@@ -528,8 +532,14 @@ local function project_args(ctx, word, opts)
     return args
 end
 
--- hits in the qualifier's package (longest prefix, for nested decls)
+-- hits whose package + owners are the qualifier, else in its package
 local function in_qualifier(cands, qualifier)
+    local exact = vim.tbl_filter(function(c)
+        local parts = { c.pkg }
+        for i = #c.chain, 1, -1 do parts[#parts + 1] = c.chain[i].name end
+        return c.pkg ~= nil and table.concat(parts, ".") == qualifier
+    end, cands)
+    if #exact > 0 then return exact end
     local best_len, keep = -1, {}
     for _, c in ipairs(cands) do
         local pkg = c.pkg
@@ -741,7 +751,7 @@ local function fits(params, args)
 end
 
 local function result(items, decisive, word)
-    if #items == 1 then return { jump = items[1] } end
+    if #items == 1 then return { jump = items[1], sole = true } end
     local best = math.huge
     for _, it in ipairs(items) do best = math.min(best, it.rank) end
     local top = vim.tbl_filter(function(it) return it.rank == best end, items)
@@ -751,6 +761,7 @@ end
 
 -- set item.rank and pick; o.filtered = already narrowed by the receiver
 local function finish(ctx, word, cands, o, read)
+    if o.kind then cands = vim.tbl_filter(function(c) return c.kind == o.kind end, cands) end
     if #cands == 0 then return { err = "no declaration found for '" .. word .. "'" } end
     for _, hint in ipairs({ o.pkg or false, o.soft_qualifier or false }) do
         if hint then
@@ -839,10 +850,10 @@ local function decide(ctx, word, opts, hits, read, headers, final)
         if #cands == 0 then
             return final and { err = ("no declaration of '%s' in %s"):format(word, opts.qualifier) } or nil
         end
-        return finish(ctx, word, cands, { filtered = true, no_shape = opts.import_line }, read)
+        return finish(ctx, word, cands, { filtered = true, no_shape = opts.import_line, kind = opts.kind }, read)
     end
 
-    local o = { pkg = opts.pkg, soft_qualifier = opts.soft_qualifier }
+    local o = { pkg = opts.pkg, soft_qualifier = opts.soft_qualifier, kind = opts.kind }
     if opts.levels or #implicit > 0 then
         -- receiver types (or implicit ones) before anything top level
         local keep = by_owner(pool, opts.levels or { implicit }, headers, opts.levels ~= nil)
@@ -1067,6 +1078,202 @@ local function receiver_opts(ctx, r)
 end
 
 -------------------------------------------------------------------
+-- types
+-------------------------------------------------------------------
+
+-- nested resolutions a type lookup may take
+local MAX_DEPTH = 4
+
+local function literal_type(s)
+    local c = s:sub(1, 1)
+    if c == '"' then return "String" end
+    if c == "'" then return "Char" end
+    local w = s:match("^[%w_.]+") or ""
+    if w == "true" or w == "false" then return "Boolean" end
+    if not w:match("^%.?%d") then return nil end
+    if w:match("^0[xXbB]") then return w:match("[lL]$") and "Long" or "Int" end
+    if w:match("[uU][lL]?$") then return w:match("[lL]$") and "ULong" or "UInt" end
+    if w:match("[lL]$") then return "Long" end
+    if w:match("[fF]$") then return "Float" end
+    if w:find("[.eE]") then return "Double" end
+    return "Int"
+end
+
+-- `a.b.Foo<X>?` -> { name = "Foo", qual = "a.b" }; nil for a function type
+local function parse_type(s)
+    local t = s:match("^%s*([%a_][%w_.]*)")
+    if not t then return nil end
+    local qual, name = t:match("^(.*)%.([%w_]+)$")
+    return { name = name or t, qual = qual }
+end
+
+-- last identifier of the chain `a.b(x).c<T>()!!` at (l, c) -> { lnum, col, word, call }
+local function chain_end(m, l, c)
+    local line, i = m[l] or "", c + 1
+    local last
+    while true do
+        local s, id = line:match("^%s*()([%a_][%w_]*)", i)
+        if not s then break end
+        i = s + #id
+        last = { lnum = l, col = s - 1, word = id }
+        i = line:match("^%b<>()", i) or i
+        local p = line:match("^%s*%b()()", i)
+        last.call = p ~= nil
+        i = p or i
+        i = line:match("^!!()", i) or i
+        local dot = line:match("^%s*%??%.()", i)
+        if not dot then break end
+        i = dot
+    end
+    return last, n
+end
+
+local function pos_in(text, idx)
+    local l, start = 1, 1
+    for nl in text:sub(1, idx - 1):gmatch("()\n") do
+        l, start = l + 1, nl + 1
+    end
+    return l, idx - start
+end
+
+-- where the type of `it` comes from: { name, qual?, path } | { self = item }
+-- (a type) | { expr = { lnum, col }, path } (a value to resolve)
+local function type_source(ctx, E, it)
+    local s = it.sym
+    if s.kind == "type" then return { self = it } end
+    if s.kind == "entry" then return s.owners[1] and { name = s.owners[1].name, path = it.filename } end
+    local lines = vim.list_slice(lines_for(ctx, E, it.filename, it.lnum), it.lnum, it.lnum + 30)
+    local m = scope.mask(lines)
+    local col = (it.col or 1) - 1
+    if it.filename:sub(-5) == ".java" then
+        local t = (m[1]:sub(1, col):gsub("%b<>", "")):match("([%w_.]+)%s*$")
+        return t and vim.tbl_extend("force", parse_type(t), { path = it.filename })
+    end
+    local text = table.concat(m, "\n")
+    local i = col + #s.name + 1
+    if s.kind == "fun" then
+        local open = text:find("(", i, true)
+        local group = open and text:match("^%b()", open)
+        if not group then return nil end
+        i = open + #group
+    end
+    local typed = text:match("^%s*:%s*()", i)
+    if typed then
+        local t = parse_type(text:sub(typed))
+        return t and vim.tbl_extend("force", t, { path = it.filename })
+    end
+    local v = text:match("^%s*=%s*()", i) or text:match("^%s*by%s+lazy%s*{%s*()", i)
+        or text:match("^%s*by%s+remember%s*%b()%s*{%s*()", i) or text:match("^%s*by%s+remember%s*{%s*()", i)
+    if not v then return nil end
+    local l, c = pos_in(text, v)
+    local lit = literal_type(lines[l]:sub(c + 1))
+    if lit then return { name = lit, path = it.filename } end
+    local last = chain_end(m, l, c)
+    if not last then return nil end
+    if last.call and last.word:match("^%u") then
+        return { name = last.word, path = it.filename } -- a constructor
+    end
+    return { expr = { lnum = it.lnum + l - 1, col = last.col }, path = it.filename }
+end
+
+local function base_for(ctx, E, path)
+    if path == ctx.path then return ctx.base or ctx end
+    E.bases = E.bases or {}
+    if not E.bases[path] then E.bases[path] = M.base_of(path, read_of(E).lines(path)) end
+    return E.bases[path]
+end
+
+-- the one best-ranked item of a result, or nil
+local function decided(res)
+    if res.jump then return res.jump end
+    local best, pick = math.huge, nil
+    for _, it in ipairs(res.pool or {}) do
+        if (it.rank or 0) < best then
+            best, pick = it.rank or 0, it
+        elseif (it.rank or 0) == best then
+            pick = nil
+        end
+    end
+    return pick
+end
+
+local type_of
+
+local function value_type(ctx, E, base, lnum, col, depth)
+    if depth >= MAX_DEPTH then return nil end
+    local vctx = M.context_at(base, lnum, col)
+    local it = vctx and decided(M.resolve(vctx, E, { depth = depth + 1 }))
+    return it and it.sym and type_of(ctx, E, it, depth + 1)
+end
+
+type_of = function(ctx, E, it, depth)
+    local src = type_source(ctx, E, it)
+    if not src or not src.expr then return src end
+    return value_type(ctx, E, base_for(ctx, E, src.path), src.expr.lnum, src.expr.col, depth or 0)
+end
+
+-- type of the receiver's last segment (its own receiver: the rest of the chain)
+local function receiver_type(ctx, r, E, depth)
+    if r.kind == "call" then return value_type(ctx, E, ctx, r.lnum, r.col, depth) end
+    if r.kind ~= "chain" or r.ctor then return nil end
+    local col = r.col
+    if #r.segs > 1 then col = col + #table.concat(r.segs, ".", 1, #r.segs - 1) + 1 end
+    return value_type(ctx, E, ctx, r.lnum, col, depth)
+end
+
+-- does the chain start at `this`, a decl of this buffer or an imported value?
+local function cheap_root(ctx, r)
+    for _ = 1, MAX_DEPTH do
+        if r.kind == "this" or r.kind == "super" then return true end
+        local l, c, w
+        if r.kind == "chain" then
+            l, c, w = r.lnum, r.col, r.segs[1]
+        elseif r.kind == "call" then
+            local cctx = M.context_at(ctx, r.lnum, r.col)
+            if not cctx then return false end
+            if not cctx.recv then
+                l, c, w = r.lnum, r.col, cctx.word
+            else
+                r = cctx.recv
+            end
+        else
+            return false
+        end
+        if w then
+            return not w:match("^%u") and (local_decl(ctx, w, l, c) ~= nil or ctx.hdr.explicit[w] ~= nil)
+        end
+    end
+    return false
+end
+
+local function type_result(ctx, E, t)
+    if t.self then return { jump = t.self, here = t.self.filename == ctx.path } end
+    local base = t.path and base_for(ctx, E, t.path) or ctx
+    local tctx = M.name_context(base, t.name)
+    local qual = t.qual or base.hdr.explicit[t.name]
+    if qual then
+        return project(tctx, t.name, { qualifier = qual, pkg_dir = pkg_dir(qual), kind = "type" }, E)
+    end
+    for _, d in ipairs(scope.decls(base.sc, t.name)) do
+        if d.kind == "type" then
+            return { jump = here_item(base, d), here = base.path == ctx.path }
+        end
+    end
+    return project(tctx, t.name, { kind = "type", implicit = {} }, E)
+end
+
+--- grt
+function M.type_at(ctx, E)
+    local res = M.resolve(ctx, E, { stay = true })
+    if res.err then return res end
+    local it = decided(res)
+    if not it then return { err = "'" .. ctx.word .. "' is ambiguous" } end
+    local t = it.sym and type_of(ctx, E, it, 0)
+    if not t then return { err = "no type known for '" .. ctx.word .. "'" } end
+    return type_result(ctx, E, t)
+end
+
+-------------------------------------------------------------------
 -- lambdas with a receiver
 -------------------------------------------------------------------
 
@@ -1249,10 +1456,27 @@ function M.resolve(ctx, E, opts)
     end
 
     if ctx.recv then
-        local opts = receiver_opts(ctx, ctx.recv)
-        local d = opts.levels and member_in_buffer(ctx, opts.levels)
+        local ro = receiver_opts(ctx, ctx.recv)
+        local d = ro.levels and member_in_buffer(ctx, ro.levels)
         if d then return { jump = here_item(ctx, d), here = true } end
-        return project(ctx, word, opts, E)
+        local res = project(ctx, word, ro, E)
+        if ro.levels or res.sole or (opts.depth or 0) >= MAX_DEPTH
+            or not cheap_root(ctx, ctx.recv) then
+            return res
+        end
+        -- several candidates: look the receiver's type up
+        local t = receiver_type(ctx, ctx.recv, E, opts.depth or 0)
+        if t and t.self then t = { name = t.self.sym.name } end
+        if not t or t.name:match("^%u%d?$") then return res end -- (a type parameter)
+        local levels = { { t.name } }
+        d = member_in_buffer(ctx, levels)
+        if d then return { jump = here_item(ctx, d), here = true } end
+        local typed = project(ctx, word, { levels = levels }, E)
+        if typed.err then return res end
+        for _, it in ipairs(res.jump and typed.pool or {}) do
+            if it.filename == res.jump.filename and it.lnum == res.jump.lnum then return res end
+        end
+        return typed
     end
 
     local own = own_decl(ctx, E, opts)

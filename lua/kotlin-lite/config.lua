@@ -88,7 +88,8 @@ M.defaults = {
     -- lhs per action; a string or a list, false to disable
     -- The gr*/gO aliases shadow Neovim's default LSP maps in kotlin buffers only.
     keymaps = {
-        goto_definition    = { "gd", "grt" },  -- grt (type_definition) alias
+        goto_definition    = "gd",
+        goto_type_definition = "grt",
         goto_implementation = "gri",           -- subtypes / overrides / actuals
         hover              = "K",
         signature_help     = "gK",
