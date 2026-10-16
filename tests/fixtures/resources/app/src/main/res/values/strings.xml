@@ -1,0 +1,14 @@
+<resources>
+    <string name="app_name">Fixture</string>
+    <string name="greeting">Hello</string>
+    <plurals name="apples">
+        <item quantity="one">%d apple</item>
+        <item quantity="other">%d apples</item>
+    </plurals>
+    <string-array name="planets">
+        <item>Mercury</item>
+    </string-array>
+    <style name="Theme.Fixture" parent="Theme.Material3.DayNight">
+        <item name="accent">@color/accent</item>
+    </style>
+</resources>

@@ -84,10 +84,10 @@ end
 function M.engine(async)
     local E = {}
     if async then
-        function E.start(extra, dirs)
+        function E.spawn(cmd, read)
             local h = {}
-            h.obj = vim.system(rg_cmd(extra, dirs), { text = true }, function(res)
-                local items = parse(res.stdout)
+            h.obj = vim.system(cmd, { text = true }, function(res)
+                local items = read(res.stdout)
                 vim.schedule(function()
                     h.items = items
                     local co = h.co
@@ -108,19 +108,35 @@ function M.engine(async)
             return coroutine.yield()
         end
     else
-        function E.start(extra, dirs)
-            return { obj = vim.system(rg_cmd(extra, dirs), { text = true }) }
+        function E.spawn(cmd, read)
+            return { obj = vim.system(cmd, { text = true }), read = read }
         end
         function E.await(h)
-            h.items = h.items or parse(h.obj:wait().stdout)
+            h.items = h.items or h.read(h.obj:wait().stdout)
             return h.items
         end
+    end
+    function E.start(extra, dirs)
+        return E.spawn(rg_cmd(extra, dirs), parse)
     end
     function E.cancel(h)
         if not h.items then pcall(h.obj.kill, h.obj, 15) end
     end
     function E.run(extra, dirs)
         return E.await(E.start(extra, dirs))
+    end
+    --- files matching any of `globs` -> items at their first line
+    function E.files(globs, dirs)
+        local cmd = { "rg", "--files", "--no-messages" }
+        for _, g in ipairs(globs) do vim.list_extend(cmd, { "-g", g }) end
+        vim.list_extend(cmd, dirs)
+        return E.await(E.spawn(cmd, function(stdout)
+            local items = {}
+            for _, f in ipairs(vim.split(stdout or "", "\n", { trimempty = true })) do
+                items[#items + 1] = { filename = f, lnum = 1, col = 1, text = vim.fs.basename(f) }
+            end
+            return items
+        end))
     end
     return E
 end

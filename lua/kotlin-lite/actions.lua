@@ -194,6 +194,11 @@ function M.hover()
     local buf = vim.api.nvim_get_current_buf()
     require("kotlin-lite.resolve").at_cursor(function(res)
         if res.err then return notify_err(res) end
+        if res.resources then
+            return vim.lsp.util.open_floating_preview(require("kotlin-lite.resources").hover_lines(res), "", {
+                border = "rounded", max_width = 100, max_height = 30, focus_id = "kotlin-lite-hover",
+            })
+        end
         local it = res.jump or defs.rows(res.pool)[1].data
         local lines
         if res.here and vim.api.nvim_buf_is_valid(buf) then

@@ -10,6 +10,7 @@ local jars = require("kotlin-lite.jars")
 local defs = require("kotlin-lite.defs")
 local autoimport = require("kotlin-lite.autoimport")
 local reader = require("kotlin-lite.reader")
+local resources = require("kotlin-lite.resources")
 
 local M = {}
 
@@ -1565,6 +1566,10 @@ function M.resolve(ctx, E, opts)
             qualifier = imp.qualifier, pkg_dir = pkg_dir(imp.qualifier), import_line = true,
         }, E)
     end
+
+    local ref = resources.ref(ctx)
+    local found = ref and resources.resolve(ref, E)
+    if found then return found end
 
     if ctx.code then
         local na = named_arg(ctx.sc, ctx.lnum, ctx.s, ctx.e)
