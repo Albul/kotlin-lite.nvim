@@ -141,6 +141,14 @@ function M.engine(async)
     return E
 end
 
+--- Move a hit's column to `word` (when spelled the same in it), set end_col.
+function M.at_word(it, word)
+    local s = it.text:find(word, it.col - it.indent, true)
+    if s then it.col = s + it.indent end
+    it.end_col = it.col + #word
+    return it
+end
+
 -- project root + every extracted jar source tree
 function M.search_dirs()
     local dirs = { M.root() }

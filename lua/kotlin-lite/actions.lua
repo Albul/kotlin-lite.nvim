@@ -189,6 +189,19 @@ local function show_float(it, lines, head)
     })
 end
 
+-- title, then "key  value" rows aligned
+local function show_listing(listing)
+    local w = 0
+    for _, r in ipairs(listing.rows) do w = math.max(w, vim.fn.strdisplaywidth(r[1])) end
+    local lines = { listing.title, "" }
+    for _, r in ipairs(listing.rows) do
+        lines[#lines + 1] = r[1] .. string.rep(" ", w - vim.fn.strdisplaywidth(r[1]) + 2) .. r[2]
+    end
+    vim.lsp.util.open_floating_preview(lines, "", {
+        border = "rounded", max_width = 100, max_height = 30, focus_id = "kotlin-lite-hover",
+    })
+end
+
 -- what gd resolves to; of several, the best-ranked
 function M.hover()
     local buf = vim.api.nvim_get_current_buf()
@@ -196,11 +209,7 @@ function M.hover()
     resolve.run(function(ctx, E)
         local res = resolve.resolve(ctx, E)
         if res.err then return notify_err(res) end
-        if res.resources then
-            return vim.lsp.util.open_floating_preview(require("kotlin-lite.resources").hover_lines(res), "", {
-                border = "rounded", max_width = 100, max_height = 30, focus_id = "kotlin-lite-hover",
-            })
-        end
+        if res.listing then return show_listing(res.listing) end
         local it = res.jump or defs.rows(res.pool)[1].data
         local lines
         if res.here and vim.api.nvim_buf_is_valid(buf) then
@@ -338,8 +347,10 @@ function M.rename()
         resolve.run(function(ctx, E)
             local u = require("kotlin-lite.usages").find(ctx, E)
             if not u.items then return replace_word(word, new, search.root(), "project, unresolved") end
-            if u.resource then
-                vim.notify("kotlin-lite: " .. u.resource .. " is a resource, rename it in the xml", vim.log.levels.WARN)
+            local g = u.generated
+            if g then
+                vim.notify(("kotlin-lite: %s is %s, rename it in %s"):format(g.label, g.source.kind, g.source.home),
+                    vim.log.levels.WARN)
                 return
             end
             if jars.is_jar(u.decl.filename) then

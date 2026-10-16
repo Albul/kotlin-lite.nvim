@@ -3,7 +3,7 @@
 
 local search = require("kotlin-lite.search")
 
-local M = {}
+local M = { kind = "a resource", home = "the xml" }
 
 local VALUE_TAGS = {
     string = { "string" },
@@ -92,25 +92,32 @@ local function find_items(ref, E)
     return items
 end
 
+-- K: the value (or the file) per qualifier
+local function listing(label, items)
+    local rows = {}
+    for _, it in ipairs(items) do
+        local value = it.file and vim.fn.fnamemodify(it.filename, ":.") or it.text:match(">(.-)</") or it.text
+        rows[#rows + 1] = { it.qualifier, value }
+    end
+    return { title = label, rows = rows }
+end
+
 --- -> nil when nothing is found, else a resolve result with `resources`
---- (every match, default qualifier first) and `label` (R.string.x)
+--- (every match, default qualifier first)
 function M.resolve(ref, E)
     local items = find_items(ref, E)
     if #items == 0 then return nil end
     local label = ref.class .. "." .. ref.type .. "." .. ref.name
+    local res = { resources = items, label = label, listing = listing(label, items) }
     local cands = vim.tbl_filter(function(it) return it.default end, items)
     if ref.type == "id" or #cands == 0 then cands = items end
-    if #cands == 1 then return { jump = cands[1], resources = items, label = label, ref = ref } end
-    for _, it in ipairs(cands) do it.rank = 0 end
-    return { pool = cands, word = label, resources = items, label = label, ref = ref }
-end
-
--- column of `name` in the hit, if it's spelled the same there
-local function at_name(it, name)
-    local s = it.text:find(name, it.col - it.indent, true)
-    if s then it.col = s + it.indent end
-    it.end_col = it.col + #name
-    return it
+    if #cands == 1 then
+        res.jump = cands[1]
+    else
+        for _, it in ipairs(cands) do it.rank = 0 end
+        res.pool, res.word = cands, label
+    end
+    return res
 end
 
 --- gu: R.<type>.<name> in Kotlin / Java, @<type>/<name> in Android xml
@@ -127,19 +134,7 @@ function M.usages(ref, E)
     end
     local out = {}
     for _, h in ipairs({ code, xml }) do
-        for _, it in ipairs(E.await(h)) do out[#out + 1] = at_name(it, ref.name) end
-    end
-    return out
-end
-
---- K: the value (or file) per qualifier
-function M.hover_lines(res)
-    local w = 0
-    for _, it in ipairs(res.resources) do w = math.max(w, #it.qualifier) end
-    local out = { res.label, "" }
-    for _, it in ipairs(res.resources) do
-        local value = it.file and vim.fn.fnamemodify(it.filename, ":.") or it.text:match(">(.-)</") or it.text
-        out[#out + 1] = it.qualifier .. string.rep(" ", w - #it.qualifier + 2) .. value
+        for _, it in ipairs(E.await(h)) do out[#out + 1] = search.at_word(it, ref.name) end
     end
     return out
 end

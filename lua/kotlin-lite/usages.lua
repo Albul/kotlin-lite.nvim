@@ -6,7 +6,6 @@ local scope = require("kotlin-lite.scope")
 local imports = require("kotlin-lite.imports")
 local jars = require("kotlin-lite.jars")
 local resolve = require("kotlin-lite.resolve")
-local resources = require("kotlin-lite.resources")
 
 local M = {}
 
@@ -178,11 +177,11 @@ local function means(S, path, sc, l, c)
     return S.family()[t] == true
 end
 
---- -> { items, sym, decl, here_only } | { items, resource } | { unresolved = true, err? }
+--- -> { items, sym, decl, here_only } | { items, generated } | { unresolved = true, err? }
 function M.find(ctx, E)
     local res = resolve.resolve(ctx, E, { stay = true })
     if res.err then return { unresolved = true, err = res.err } end
-    if res.ref then return { items = resources.usages(res.ref, E), resource = res.label } end
+    if res.source then return { items = res.source.usages(res.ref, E), generated = res } end
     local decl = resolve.decided(res)
     if not decl or not decl.sym then return { unresolved = true } end
     local sym, word = decl.sym, decl.sym.name

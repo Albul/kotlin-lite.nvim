@@ -379,7 +379,7 @@ end
 -- resolve result -> declarations to search from, or nil + message
 local function declarations(res)
     if res.err then return nil, res.err end
-    if res.resources then return nil, res.label .. " is a resource" end
+    if res.source then return nil, res.label .. " is " .. res.source.kind end
     if res.jump then return { res.jump } end
     -- KMP: the expect is the declaration, the actuals are the answer
     local expects = vim.tbl_filter(function(it) return it.sym.mp == "expect" end, res.pool)

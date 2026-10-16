@@ -10,7 +10,9 @@ local jars = require("kotlin-lite.jars")
 local defs = require("kotlin-lite.defs")
 local autoimport = require("kotlin-lite.autoimport")
 local reader = require("kotlin-lite.reader")
-local resources = require("kotlin-lite.resources")
+
+-- R.string.x, BuildConfig.X, ...: classes generated from files that aren't Kotlin
+local GENERATED = { require("kotlin-lite.resources"), require("kotlin-lite.gradle") }
 
 local M = {}
 
@@ -1626,9 +1628,14 @@ function M.resolve(ctx, E, opts)
         }, E)
     end
 
-    local ref = resources.ref(ctx)
-    local found = ref and resources.resolve(ref, E)
-    if found then return found end
+    for _, source in ipairs(GENERATED) do
+        local ref = source.ref(ctx)
+        local found = ref and source.resolve(ref, E)
+        if found then
+            found.ref, found.source = ref, source
+            return found
+        end
+    end
 
     if ctx.code then
         local na = named_arg(ctx.sc, ctx.lnum, ctx.s, ctx.e)
