@@ -96,6 +96,10 @@ describe("gri", function()
         { "expect class from a usage",
             clock .. "UseClock.kt", "fun useClock", "KmpClock", "kotlin/KmpClock.apple.kt:3 kotlin/KmpClock.jvm.kt:3" },
         { "final class -> nothing, stays put", shape, "class Square", "Square", "" },
+        { "interface -> subtypes and its DI registrations (single / factory / bind), not a same-named type's",
+            "impl/di/Repos.kt", "interface Repo", "Repo",
+            "di/Modules.kt:4 di/Modules.kt:5 di/Modules.kt:6 di/Modules.kt:7 di/Repos.kt:5 di/Repos.kt:7" },
+        { "registered only: the registration", "impl/di/Repos.kt", "interface Clock", "Clock", "di/Modules.kt:8" },
     }
     for _, c in ipairs(cases) do
         local name, file, needle, word, want = unpack(c)

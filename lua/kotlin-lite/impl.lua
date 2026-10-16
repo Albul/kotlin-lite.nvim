@@ -349,6 +349,24 @@ local function actuals(cache, word, pkg, owner, dirs, E)
     return out
 end
 
+-- DI registrations of type `t` (Koin): single<T> { }, factory<T>, bind<T>(),
+-- bind T::class. Started at once, read by the returned function.
+local function registrations(cache, t, E)
+    local q = [=[([\w.]+\.)?]=] .. t.name
+    local h = E.start({
+        "-e", [=[\b(single|factory|scoped|viewModel|worker|bind)\s*<\s*]=] .. q .. [=[\s*[<>]]=],
+        "-e", [=[\bbinds?\b.*\b]=] .. q .. [=[::class]=],
+    }, { search.root() })
+    return function()
+        local out = {}
+        for _, it in ipairs(E.await(h)) do
+            local ref = it.text:match("([%w_.]*%f[%w_]" .. t.name .. ")%f[^%w_]")
+            if ref and refers(cache, it.filename, ref, t) then out[#out + 1] = it end
+        end
+        return out
+    end
+end
+
 -- `override fun|val|var word` declared inside one of `subs`
 local function overrides(cache, word, subs, dirs, E)
     local keys = {}
@@ -402,9 +420,12 @@ function M.find(decl, cache, dirs, E)
     local s = decl.sym
     local results = {}
     if s.kind == "type" then
-        for _, t in ipairs(subtypes(cache, { name = s.name, pkg = s.pkg }, dirs, E)) do
-            results[#results + 1] = t.item
+        local t = { name = s.name, pkg = s.pkg }
+        local registered = registrations(cache, t, E)
+        for _, sub in ipairs(subtypes(cache, t, dirs, E)) do
+            results[#results + 1] = sub.item
         end
+        vim.list_extend(results, registered())
         if s.mp == "expect" then
             vim.list_extend(results, actuals(cache, s.name, s.pkg, s.owners[1] and s.owners[1].name, dirs, E))
         end
