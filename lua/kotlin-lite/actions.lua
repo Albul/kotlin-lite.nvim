@@ -49,8 +49,6 @@ local function jump(it)
 end
 M._jump, M._tag_origin, M._push_tag = jump, tag_origin, push_tag
 
-local package_of = imports.package_of
-
 -- the match the file header points at (imports / package), then project over jar
 local function best(items, word)
     imports.rank_items(imports.current(), word, items)
@@ -67,87 +65,15 @@ end
 -- goto definition (gd)
 -------------------------------------------------------------------
 
--- `import a.b.Foo.Inner [as X]` under the cursor -> { name = decl to look up,
--- qualifier = what precedes it ("a.b.Foo") }. A class segment (Foo, Inner)
--- targets itself; anywhere else on the line (keyword, package segment, alias)
--- targets the imported decl. `import a.b.*` -> { wildcard = "a.b" }.
-local function import_target(line, word)
-    local path, alias = line:match("^%s*import%s+([%w_.]+)%s+as%s+([%w_]+)")
-    path = path or line:match("^%s*import%s+([%w_.]+)")
-    if not path then return nil end
-    if path:sub(-1) == "." then return { wildcard = path:sub(1, -2) } end
-    local segs = vim.split(path, ".", { plain = true })
-    local whole = { name = segs[#segs], qualifier = table.concat(segs, ".", 1, #segs - 1) }
-    if alias == word then return whole end
-    -- packages are lowercase by convention: class segments start at the first capital
-    local first = #segs
-    for i, seg in ipairs(segs) do
-        if seg:match("^%u") then first = i break end
-    end
-    for i = #segs, first, -1 do
-        if segs[i] == word then
-            return { name = word, qualifier = table.concat(segs, ".", 1, i - 1) }
-        end
-    end
-    return whole
-end
-M._import_target = import_target
-
--- keep matches whose file package is the qualifier itself (top-level decl) or,
--- for nested decls, its longest package prefix
-local function in_qualifier(items, qualifier)
-    local best_len, keep = -1, {}
-    for _, it in ipairs(items) do
-        local pkg = package_of(it.filename)
-        if pkg and imports.within(pkg, qualifier) then
-            if #pkg > best_len then best_len, keep = #pkg, {} end
-            if #pkg == best_len then keep[#keep + 1] = it end
-        end
-    end
-    return keep
-end
-
--- what `word` under the cursor refers to: on an import line the FQ path pins the
--- package; an `as` alias used in code resolves like its import.
--- -> { word = name to look up, imp = { name, qualifier }?, ctx = header },
---    or { wildcard = "a.b" } on `import a.b.*`
-local function lookup(word)
-    local imp = import_target(vim.api.nvim_get_current_line(), word)
-    if imp and imp.wildcard then return imp end
-    local ctx = imports.current()
-    imp = imp or ctx.aliases[word]
-    return { word = imp and imp.name or word, imp = imp, ctx = ctx }
-end
-
--- rg decl matches -> pool, err, sole. `pool` is what the picker offers, `sole`
--- the one match the file header singles out (jump without asking), `err` the
--- message when nothing qualifies.
-local function candidates(items, q)
-    if q.imp then
-        items = in_qualifier(items, q.imp.qualifier)
-        if #items == 0 then
-            return nil, ("no declaration of '%s' in %s"):format(q.word, q.imp.qualifier)
-        end
-    end
-    if #items == 0 then return nil, "no declaration found for '" .. q.word .. "'" end
-    if not q.imp and imports.rank_items(q.ctx, q.word, items) < imports.NONE then
-        -- the header decides: a sole best-ranked match wins outright,
-        -- otherwise the picker lists best-ranked matches first
-        local pool = defs.latest_only(items)
-        local top_rank = math.huge
-        for _, it in ipairs(pool) do top_rank = math.min(top_rank, it.rank) end
-        local top = vim.tbl_filter(function(it) return it.rank == top_rank end, pool)
-        return pool, nil, #top == 1 and top[1] or nil
-    end
-    local project = vim.tbl_filter(function(it) return not jars.is_jar(it.filename) end, items)
-    return #project > 0 and project or defs.latest_only(items)
-end
-
-M._lookup, M._candidates = lookup, candidates
+M._import_target = imports.import_target
 
 -- go to implementation (gri): subtypes / overrides / actuals, see impl.lua
 function M.goto_implementation()
     require("kotlin-lite.impl").goto_implementation()
+end
+
+local function notify_err(res)
+    vim.notify("kotlin-lite: " .. res.err, res.level or vim.log.levels.WARN)
 end
 
 function M.goto_definition()
@@ -159,29 +85,20 @@ function M.goto_definition()
         jump(it)
     end
 
-    local q = lookup(word)
-    if q.wildcard then
-        vim.notify("kotlin-lite: wildcard import of " .. q.wildcard .. ", nothing to jump to",
-            vim.log.levels.INFO)
-        return
-    end
-    if not q.imp and search.find_decl_in_buffer(word) then return push_tag(origin) end
-    word = q.word
-
-    search.rg(search.decl_args(word), search.search_dirs(), function(items)
-        local pick, err, sole = candidates(items, q)
-        if not pick then
-            vim.notify("kotlin-lite: " .. err, vim.log.levels.WARN)
+    require("kotlin-lite.resolve").at_cursor(function(res)
+        if res.err then return notify_err(res) end
+        if res.here then
+            -- same buffer: no :edit, keep the view
+            push_tag(origin)
+            vim.cmd("normal! m'")
+            vim.api.nvim_win_set_cursor(0, { res.jump.lnum, res.jump.col - 1 })
+            vim.cmd("normal! zv")
             return
         end
-        if sole then return go(sole) end
-        if #pick == 1 then
-            go(pick[1])
-        else
-            require("kotlin-lite.picker").select(defs.rows(pick), {
-                prompt = "Definition: " .. word,
-            }, go)
-        end
+        if res.jump then return go(res.jump) end
+        require("kotlin-lite.picker").select(defs.rows(res.pool), {
+            prompt = "Definition: " .. res.word,
+        }, go)
     end)
 end
 
@@ -194,26 +111,18 @@ end
 -- and :tag /regex fall back to tags files.
 function M.tagfunc(pattern, flags)
     if flags:find("[ir]") or not pattern:match("^[%a_][%w_]*$") then return vim.NIL end
-    local cursor = flags:find("c") ~= nil
-    local q = cursor and lookup(pattern)
-        or { word = pattern, ctx = imports.current() }
-    if q.wildcard then return {} end
-
-    local function tag(file, lnum, col)
-        return { name = pattern, filename = file, cmd = ("/\\%%%dl\\%%%dc/"):format(lnum, col) }
+    local res = require("kotlin-lite.resolve").sync(pattern, flags:find("c") ~= nil)
+    local function tag(it)
+        return {
+            name = pattern,
+            filename = it.filename,
+            cmd = ("/\\%%%dl\\%%%dc/"):format(it.lnum, it.col or 1),
+        }
     end
-    if cursor and not q.imp then
-        local local_decl = search.decl_in_buffer(pattern)
-        if local_decl then
-            return { tag(vim.api.nvim_buf_get_name(0), local_decl.lnum, local_decl.col + 1) }
-        end
-    end
-
-    local pool = candidates(search.rg_sync(search.decl_args(q.word), search.search_dirs()), q)
-    if not pool then return {} end
+    if res.jump then return { tag(res.jump) } end
     local out = {}
-    for _, row in ipairs(defs.rows(pool)) do -- rows come sorted best first
-        out[#out + 1] = tag(row.data.filename, row.data.lnum, row.data.col or 1)
+    for _, row in ipairs(defs.rows(res.pool or {})) do -- best first
+        out[#out + 1] = tag(row.data)
     end
     return out
 end
@@ -246,9 +155,14 @@ local function doc_block(lines, lnum)
     return block
 end
 
-local function show_float(it)
-    local ok, lines = pcall(vim.fn.readfile, it.filename)
-    if not ok then return end
+-- `lines`: the file's text when at hand (a buffer's)
+local function show_float(it, lines)
+    if not lines then
+        local ok, read = pcall(vim.fn.readfile, it.filename)
+        if not ok then return end
+        lines = read
+    end
+    if not lines[it.lnum] then return end
     local block = doc_block(lines, it.lnum)
     table.insert(block, "")
     table.insert(block, "-- " .. display(it))
@@ -260,16 +174,18 @@ local function show_float(it)
     })
 end
 
+-- what gd resolves to; of several, the best-ranked
 function M.hover()
-    local word = vim.fn.expand("<cword>")
-    if word == "" then return end
-    search.rg(search.decl_args(word), search.search_dirs(), function(items)
-        if #items == 0 then
-            vim.notify("kotlin-lite: nothing found for '" .. word .. "'", vim.log.levels.WARN)
-            return
+    local buf = vim.api.nvim_get_current_buf()
+    require("kotlin-lite.resolve").at_cursor(function(res)
+        if res.err then return notify_err(res) end
+        local it = res.jump or defs.rows(res.pool)[1].data
+        local lines
+        if res.here and vim.api.nvim_buf_is_valid(buf) then
+            lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
         end
-        show_float(best(items, word))
-    end)
+        show_float(it, lines)
+    end, "K")
 end
 
 function M.signature_help()

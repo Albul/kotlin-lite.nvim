@@ -160,6 +160,7 @@ local function header_text(lines, l)
     end
     return acc, j
 end
+M.header_text = header_text
 
 -------------------------------------------------------------------
 -- per-run file cache: lines, package, header ctx, class headers
@@ -169,40 +170,24 @@ local function indent(line)
     return #(line:match("^%s*"))
 end
 
-local function new_cache()
-    local files, heads = {}, {}
+local function new_cache(read)
+    local files = {}
     local cache = {}
 
     function cache.file(path)
         local f = files[path]
         if f then return f end
-        local lines
-        local buf = vim.fn.bufnr(path)
-        if buf ~= -1 and vim.api.nvim_buf_is_loaded(buf) then
-            lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-        else
-            local ok, read = pcall(vim.fn.readfile, path)
-            lines = ok and read or {}
-        end
-        f = { path = path, lines = lines }
+        f = { path = path, lines = read.lines(path) }
         files[path] = f
         return f
     end
 
-    -- package + imports; reads only the head unless the file is already loaded
     function cache.ctx(path)
-        if heads[path] then return heads[path] end
-        local lines = files[path] and files[path].lines
-        if not lines then
-            local ok, read = pcall(vim.fn.readfile, path, "", 300)
-            lines = ok and read or {}
-        end
-        heads[path] = imports.parse(lines)
-        return heads[path]
+        return read.header(path)
     end
 
     function cache.package(path)
-        return (heads[path] or cache.ctx(path)).package
+        return read.package(path)
     end
 
     -- class header starting at line `l` (cached), or nil
@@ -257,21 +242,6 @@ local function new_cache()
 end
 
 -------------------------------------------------------------------
--- async rg inside a coroutine
--------------------------------------------------------------------
-
-local function rg(args, dirs)
-    local co = coroutine.running()
-    search.rg(args, dirs, function(items)
-        local ok, err = coroutine.resume(co, items)
-        if not ok then
-            vim.notify("kotlin-lite: gri failed: " .. tostring(err), vim.log.levels.ERROR)
-        end
-    end)
-    return coroutine.yield()
-end
-
--------------------------------------------------------------------
 -- searches
 -------------------------------------------------------------------
 
@@ -321,7 +291,7 @@ end
 -- all subtypes of { name, pkg }, transitively: one rg per hierarchy level, all
 -- of that level's type names in a single alternation.
 -- -> list of { item, header, key = "file:lnum" }
-local function subtypes(cache, root, dirs)
+local function subtypes(cache, root, dirs, E)
     local out, seen_types, seen_hdr = {}, {}, {}
     seen_types[(root.pkg or "") .. "." .. root.name] = true
     local level, budget = { root }, MAX_TYPES
@@ -336,7 +306,7 @@ local function subtypes(cache, root, dirs)
             table.insert(by_name[t.name], t)
         end
         local alt = "(" .. table.concat(names, "|") .. ")"
-        local found = rg({
+        local found = E.run({
             "-e", [=[[:,]\s*([\w.]+\.)?]=] .. alt .. [=[\b]=],
             "-e", [=[^\s*([\w.]+\.)?]=] .. alt .. [=[\b]=],
         }, dirs)
@@ -367,9 +337,9 @@ end
 
 -- `actual` counterparts of an expect decl `word` in package `pkg`; for members,
 -- only those inside an actual class named `owner`
-local function actuals(cache, word, pkg, owner, dirs)
+local function actuals(cache, word, pkg, owner, dirs, E)
     local out = {}
-    for _, it in ipairs(rg(search.decl_args(word), dirs)) do
+    for _, it in ipairs(E.run(search.decl_args(word), dirs)) do
         if it.text:find("%f[%w_]actual%f[^%w_]") and cache.package(it.filename) == pkg then
             local enc = cache.enclosing(it.filename, it.lnum)
             local enc_name = enc and enc.name
@@ -380,11 +350,11 @@ local function actuals(cache, word, pkg, owner, dirs)
 end
 
 -- `override fun|val|var word` declared inside one of `subs`
-local function overrides(cache, word, subs, dirs)
+local function overrides(cache, word, subs, dirs, E)
     local keys = {}
     for _, s in ipairs(subs) do keys[s.key] = true end
     local w = word
-    local found = rg({ "-e",
+    local found = E.run({ "-e",
         [=[\boverride\b.*\b(fun|val|var)\s+(<[^>]*>\s+)?([\w.<>?,\s]+\.)?]=] .. w .. [=[\b]=] }, dirs)
     local out = {}
     for _, it in ipairs(found) do
@@ -395,25 +365,8 @@ local function overrides(cache, word, subs, dirs)
 end
 
 -------------------------------------------------------------------
--- resolving the declaration under the cursor
+-- entry point
 -------------------------------------------------------------------
-
--- does `line` itself declare `word` (type header, fun, val/var incl. ctor params)?
--- the name is the last identifier of what follows fun/val/var (generics and an
--- extension receiver may precede it), not any identifier further on the line
-local function declares(line, word)
-    local head = line:match("%f[%w_]fun%s+(.-)%s*%(")
-    if head and head:match("([%w_]+)$") == word then return "member" end
-    head = line:match("%f[%w_]va[lr]%s+([%w_.<>?, ]-)%s*[:=]")
-        or line:match("%f[%w_]va[lr]%s+([%w_.<>?, ]-)%s+by%f[^%w_]")
-        or line:match("%f[%w_]va[lr]%s+([%w_.<>?, ]-)%s*$")
-    if head and head:match("([%w_]+)$") == word then return "member" end
-    for kw in pairs(TYPE_KW) do
-        if line:find("%f[%w_]" .. kw .. "%s+" .. vim.pesc(word) .. "%f[^%w_]") then return "type" end
-    end
-    return nil
-end
-M._declares = declares
 
 local function choose(pool, word)
     local co = coroutine.running()
@@ -423,76 +376,49 @@ local function choose(pool, word)
     return coroutine.yield()
 end
 
--- -> list of decl items (filename, lnum, text) for `word`, or nil + message
-local function resolve(word)
-    local actions = require("kotlin-lite.actions")
-    local buf = vim.api.nvim_get_current_buf()
-    local path = vim.api.nvim_buf_get_name(buf)
-    local cur = vim.api.nvim_win_get_cursor(0)[1]
-    local line = vim.api.nvim_get_current_line()
-
-    local q = actions._lookup(word)
-    if q.wildcard then return nil, "wildcard import of " .. q.wildcard end
-    if not q.imp and declares(line, word) then
-        return { { filename = path, lnum = cur, col = 1, text = vim.trim(line) } }, word
-    end
-    if not q.imp then
-        local d = search.decl_in_buffer(word)
-        if d then
-            local text = vim.api.nvim_buf_get_lines(buf, d.lnum - 1, d.lnum, false)[1] or ""
-            return { { filename = path, lnum = d.lnum, col = d.col + 1, text = vim.trim(text) } }, word
-        end
-    end
-
-    local items = rg(search.decl_args(q.word), search.search_dirs())
-    local pool, err, sole = actions._candidates(items, q)
-    if not pool then return nil, err end
-    if sole then return { sole }, q.word end
+-- resolve result -> declarations to search from, or nil + message
+local function declarations(res)
+    if res.err then return nil, res.err end
+    if res.jump then return { res.jump } end
     -- KMP: the expect is the declaration, the actuals are the answer
-    local expects = vim.tbl_filter(function(it)
-        return it.text:find("%f[%w_]expect%f[^%w_]") ~= nil
-    end, pool)
-    if #expects > 0 then return expects, q.word end
-    if #pool == 1 then return pool, q.word end
-    local picked = choose(pool, q.word)
-    if not picked then return nil, nil end
-    return { picked }, q.word
+    local expects = vim.tbl_filter(function(it) return it.sym.mp == "expect" end, res.pool)
+    if #expects > 0 then return expects end
+    local best = math.huge
+    for _, it in ipairs(res.pool) do best = math.min(best, it.rank or 0) end
+    local top = vim.tbl_filter(function(it) return (it.rank or 0) == best end, res.pool)
+    if #top == 1 then return top end
+    -- an override is an implementation itself: ask only about the rest
+    local roots = vim.tbl_filter(function(it)
+        return not it.text:find("%f[%w_]override%f[^%w_]")
+    end, top)
+    if #roots == 1 then return roots end
+    local picked = choose(#roots > 0 and roots or res.pool, res.word)
+    return picked and { picked } or nil
 end
 
--------------------------------------------------------------------
--- entry point
--------------------------------------------------------------------
-
---- Implementations of the declaration `decl` names. Runs inside a coroutine.
-function M.find(decl, word, cache, dirs)
+--- Implementations of `decl` (by its `sym`); runs in a coroutine.
+function M.find(decl, cache, dirs, E)
+    local s = decl.sym
     local results = {}
-    local f = cache.file(decl.filename)
-    local line = f.lines[decl.lnum] or decl.text
-    local pkg = cache.package(decl.filename)
-    local header = cache.header_at(decl.filename, decl.lnum)
-
-    if header and header.name == word then
-        -- type: subtypes (+ actual counterparts of an expect type)
-        for _, s in ipairs(subtypes(cache, { name = word, pkg = pkg }, dirs)) do
-            results[#results + 1] = s.item
+    if s.kind == "type" then
+        for _, t in ipairs(subtypes(cache, { name = s.name, pkg = s.pkg }, dirs, E)) do
+            results[#results + 1] = t.item
         end
-        if header.mods.expect then
-            local owner_hdr = cache.enclosing(decl.filename, decl.lnum)
-            vim.list_extend(results, actuals(cache, word, pkg, owner_hdr and owner_hdr.name, dirs))
+        if s.mp == "expect" then
+            vim.list_extend(results, actuals(cache, s.name, s.pkg, s.owners[1] and s.owners[1].name, dirs, E))
         end
         return results
     end
+    if s.kind ~= "fun" and s.kind ~= "prop" then return results end
 
     -- member: overrides inside subtypes of the owner (+ actuals of an expect member)
-    local owner = cache.enclosing(decl.filename, decl.lnum)
-    local is_expect = line:find("%f[%w_]expect%f[^%w_]") ~= nil or (owner and owner.mods.expect)
-    if is_expect then
-        vim.list_extend(results, actuals(cache, word, pkg, owner and owner.name, dirs))
+    local owner = s.owners[1]
+    if s.mp == "expect" then
+        vim.list_extend(results, actuals(cache, s.name, s.pkg, owner and owner.name, dirs, E))
     end
-    -- (an anonymous object's members can't be overridden: no name, no subtypes)
     if owner and owner.name then
-        local subs = subtypes(cache, { name = owner.name, pkg = pkg }, dirs)
-        vim.list_extend(results, overrides(cache, word, subs, dirs))
+        local subs = subtypes(cache, { name = owner.name, pkg = s.pkg }, dirs, E)
+        vim.list_extend(results, overrides(cache, s.name, subs, dirs, E))
     end
     return results
 end
@@ -513,21 +439,23 @@ function M.goto_implementation()
     local word = vim.fn.expand("<cword>")
     if word == "" then return end
     local actions = require("kotlin-lite.actions")
+    local resolve = require("kotlin-lite.resolve")
     local origin = actions._tag_origin(word)
     local function go(it)
         actions._push_tag(origin)
         actions._jump(it)
     end
 
-    local co = coroutine.create(function()
-        local decls, name = resolve(word)
+    resolve.run(function(ctx, E)
+        local decls, err = declarations(resolve.resolve(ctx, E, { stay = true }))
         if not decls then
-            if name then vim.notify("kotlin-lite: " .. name, vim.log.levels.WARN) end
+            if err then vim.notify("kotlin-lite: " .. err, vim.log.levels.WARN) end
             return
         end
-        local cache, dirs, results = new_cache(), search.search_dirs(), {}
+        local name = decls[1].sym.name
+        local cache, dirs, results = new_cache(resolve.reader_of(E)), search.search_dirs(), {}
         for _, d in ipairs(decls) do
-            vim.list_extend(results, M.find(d, name, cache, dirs))
+            vim.list_extend(results, M.find(d, cache, dirs, E))
         end
         results = defs.latest_only(dedupe(results))
         if #results == 0 then
@@ -539,11 +467,7 @@ function M.goto_implementation()
                 prompt = "Implementations: " .. name,
             }, go)
         end
-    end)
-    local ok, err = coroutine.resume(co)
-    if not ok then
-        vim.notify("kotlin-lite: gri failed: " .. tostring(err), vim.log.levels.ERROR)
-    end
+    end, "gri")
 end
 
 return M

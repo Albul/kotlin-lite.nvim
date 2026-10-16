@@ -44,29 +44,6 @@ describe("impl.parse_header", function()
     end)
 end)
 
-describe("impl.declares", function()
-    local declares = impl._declares
-
-    it("fun name, not its return type", function()
-        assert.is_nil(declares("fun foo(): Flow<Int>", "Flow"))
-        assert.are.equal("member", declares("fun foo(): Flow<Int>", "foo"))
-    end)
-    it("extension fun", function()
-        assert.are.equal("member", declares("fun <T> List<T>.second(): T", "second"))
-    end)
-    it("val name, not its type", function()
-        assert.is_nil(declares("val a: Foo = Foo()", "Foo"))
-        assert.are.equal("member", declares("val a: Foo = Foo()", "a"))
-    end)
-    it("ctor property", function()
-        assert.are.equal("member", declares("    override val name: String,", "name"))
-    end)
-    it("type header, not its supertype", function()
-        assert.are.equal("type", declares("abstract class Polygon : Shape {", "Polygon"))
-        assert.is_nil(declares("abstract class Polygon : Shape {", "Shape"))
-    end)
-end)
-
 describe("gri", function()
     local cap
 
@@ -126,6 +103,46 @@ describe("gri", function()
             assert.are.equal(want, (gri(file, needle, word)))
         end)
     end
+
+    -- the declaration comes from the same resolution as gd
+    local paint = "impl/painters/Painters.kt"
+    local resolved = {
+        { "receiver type picks the member: p: Painter", paint, "// painter", "paint",
+            "painters/Painters.kt:12 painters/Painters.kt:16 painters/Painters.kt:8" },
+        { "receiver type, single implementation", paint, "// wall", "paint", "painters/Painters.kt:25" },
+        { "unknown receiver: overrides are implementations, the one root decides", paint,
+            "// unknown receiver, one root", "crack", "painters/Painters.kt:26" },
+        { "lambda receiver: with(p)", paint, "// with painter", "paint",
+            "painters/Painters.kt:12 painters/Painters.kt:16 painters/Painters.kt:8" },
+        { "on an override: its own overrides, not the super member's", paint,
+            "override fun paint", "paint", "painters/Painters.kt:12" },
+    }
+    for _, c in ipairs(resolved) do
+        local name, file, needle, word, want = unpack(c)
+        it(name, function()
+            assert.are.equal(want, (gri(file, needle, word)))
+        end)
+    end
+
+    it("unknown receiver, several roots: the picker offers only those", function()
+        local _, picked = gri(paint, "// unknown receiver", "paint")
+        assert.is_true(picked)
+        assert.are.equal("Implementations of which paint?", cap.opts.prompt)
+        local got = vim.tbl_map(function(r) return r.data.lnum end, cap.list)
+        table.sort(got)
+        assert.are.same({ 4, 20 }, got)
+    end)
+
+    it("a local has no implementations: says so, no picker", function()
+        local note = h.capture_notify()
+        h.open(paint)
+        h.cursor_at("// local", "local")
+        actions.goto_implementation()
+        h.wait(function() return note.msg ~= nil end)
+        assert.is_nil(cap.list)
+        assert.truthy((note.msg or ""):find("no implementations of 'local'", 1, true))
+        assert.are.equal(h.line_of("// local"), h.cur_line())
+    end)
 
     it("single implementation -> direct jump on the tag stack, no picker", function()
         local got, picked = gri("impl/other/Other.kt", "interface Shape", "Shape")

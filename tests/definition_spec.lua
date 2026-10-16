@@ -270,4 +270,66 @@ describe("K", function()
         assert.is_not_nil(shown)
         assert.truthy(shown[#shown]:find("defs/imports/other/Dup.kt:3", 1, true))
     end)
+
+    -- K on the `nth` `word` of the line with `needle` -> the float's lines
+    local function hover(file, needle, word, nth, edit)
+        local shown
+        h.stub(vim.lsp.util, "open_floating_preview", function(lines) shown = lines end)
+        h.open(file)
+        if edit then edit() end
+        h.cursor_at(needle, word, nth)
+        actions.hover()
+        h.wait(function() return shown ~= nil end)
+        assert.is_not_nil(shown, "no float")
+        return shown
+    end
+
+    local dsl = "gd/dsl/UseDsl.kt"
+    -- { name, file, needle, word, nth, first line of the float, footer location }
+    local cases = {
+        { "member through the receiver's type", dsl, "// apply on pen", "stroke", 1,
+            "fun stroke(width: Int, dash: Boolean = false) {}", "gd/dsl/Dsl.kt:8" },
+        { "member through a DSL lambda receiver", dsl, "// dsl canvas", "stroke", 1,
+            "fun stroke(width: Int) {}", "gd/dsl/Dsl.kt:4" },
+        { "overload picked by the arguments", dsl, "// trailing lambda", "blend", 1,
+            "fun blend(a: Int, block: () -> Unit) {}", "gd/dsl/Dsl.kt:26" },
+        { "local, from this buffer", dsl, "lazyPen.stroke", "lazyPen", 1,
+            "val lazyPen by lazy { Pen() }", "gd/dsl/UseDsl.kt:19" },
+        { "named argument -> the parameter", dsl, "pen(tint", "tint", 1,
+            "tint: String = \"black\",", "gd/dsl/Dsl.kt:14" },
+        { "param, not a same-named local of another fun", "gd/scope/Scoped.kt", "println(local * 2)", "local", 1,
+            "fun third(local: Int) {", "gd/scope/Scoped.kt:16" },
+    }
+    for _, c in ipairs(cases) do
+        local name, file, needle, word, nth, first, where = unpack(c)
+        it(name, function()
+            local shown = hover(file, needle, word, nth)
+            assert.are.equal(first, vim.trim(shown[1]))
+            assert.truthy(shown[#shown]:find(where, 1, true), shown[#shown])
+        end)
+    end
+
+    it("in-buffer declarations come from the buffer, unsaved edits included", function()
+        local shown = hover(dsl, "p.apply", "p", 1, function()
+            local l = h.line_of("val p = Pen()")
+            vim.api.nvim_buf_set_lines(0, l - 1, l - 1, false, { "    /** the pen */" })
+        end)
+        assert.are.equal("/** the pen */", vim.trim(shown[1]))
+        assert.are.equal("val p = Pen()", vim.trim(shown[2]))
+        assert.truthy(shown[#shown]:find("gd/dsl/UseDsl.kt:13", 1, true), shown[#shown])
+    end)
+
+    it("nothing found -> a warning, no float", function()
+        local shown
+        h.stub(vim.lsp.util, "open_floating_preview", function(lines) shown = lines end)
+        local note = h.capture_notify()
+        h.open(dsl)
+        h.cursor_at("fun useDsl", "useDsl")
+        vim.api.nvim_buf_set_lines(0, -1, -1, false, { "val q = nowhereToBeFound()" })
+        h.cursor_at("nowhereToBeFound", "nowhereToBeFound")
+        actions.hover()
+        h.wait(function() return note.msg ~= nil end)
+        assert.is_nil(shown)
+        assert.truthy((note.msg or ""):find("nowhereToBeFound", 1, true))
+    end)
 end)

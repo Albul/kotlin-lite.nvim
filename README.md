@@ -9,9 +9,9 @@ or unavailable, and for reading library sources extracted from `*-sources.jar`.
 
 | Default keymap        | Action                                                                 |
 | --------------------- | ---------------------------------------------------------------------- |
-| `gd`                  | Go to definition — current buffer first (locals, params, lambda params, for-vars, properties, funs, classes), then project-wide + extracted jar sources, ranked like the compiler does from the file header (explicit import → same package → `*` import → default `kotlin.*` imports; `as` aliases resolved) — a single best match is jumped to directly. Multiple hits open a picker with preview: `expect`/`actual` · signature · source set · module or `artifact version` · `file:line` (older versions of the same jar are hidden). On an `import` line it resolves through the full path (incl. nested classes and `as` aliases) and jumps without a picker. Every jump is pushed on the tag stack, so `<C-t>` / `:tags` walk back gd by gd, like with LSP |
-| `gri`                 | Go to implementation — on a type: its subtypes, transitively (incl. anonymous `object : T`); on a `fun`/`val`/`var`: the `override`s inside those subtypes; on an `expect` class or member: its `actual`s. Supertype references are checked against each file's package and imports, so a same-named type from another package doesn't count. One result → jump, several → picker |
-| `K`                   | Hover: declaration + KDoc in a floating window                         |
+| `gd`                  | Go to definition — current buffer first, by lexical scope (innermost block wins, a local only after its declaration, comments / strings ignored), then project-wide + extracted jar sources, ranked like the compiler does from the file header (explicit import → same package → `*` import → default `kotlin.*` imports; `as` aliases resolved) — a single best match is jumped to directly. It follows the receiver: `x.member` by the type of `x` (declared, constructed, `by lazy { T() }` / `remember { T() }`), `Type.member` (incl. companion members and enum entries), `this.` / `super.`, members inherited from supertypes, extensions by their receiver type, and inside `x.apply { }` / `with(x) { }` / DSL lambdas (`T.() -> Unit` of the called fun). An unqualified name prefers members of the enclosing classes and never a member of an unrelated class; overloads are narrowed by the call's arguments; a named argument (`f(name = …)`) jumps to that parameter; Java methods / fields and enum entries count too. On a declaration: `override` → the overridden member, `actual` → its `expect`, anything else stays put. In jar sources the `expect` / `actual` this file compiles against is picked (common code → `expect`, jvm / android → the jvm `actual`). Multiple hits open a picker with preview: `expect`/`actual` · signature · source set · module or `artifact version` · `file:line` (older versions of the same jar are hidden). On an `import` line it resolves through the full path (incl. nested classes and `as` aliases) and jumps without a picker. Every jump is pushed on the tag stack, so `<C-t>` / `:tags` walk back gd by gd, like with LSP |
+| `gri`                 | Go to implementation — of the declaration `gd` resolves to (receiver types, lambda receivers, named args included; on a declaration itself: that one, an `override` too). With an unknown receiver, `override`s count as implementations and only the declarations they implement are offered. On a type: its subtypes, transitively (incl. anonymous `object : T`); on a `fun`/`val`/`var`: the `override`s inside those subtypes; on an `expect` class or member: its `actual`s. Supertype references are checked against each file's package and imports, so a same-named type from another package doesn't count. One result → jump, several → picker |
+| `K`                   | Hover: declaration + KDoc in a floating window — of what `gd` resolves to (locals and parameters from the buffer, unsaved edits included; of several candidates, the best-ranked) |
 | `gK` / `<C-s>` (insert) | Signature of the function whose call the cursor is inside            |
 | `<C-]>` `<C-w>]` `g]` `:tag` `:ptag` `<C-w>}` | Vim's tag commands resolve like `gd` (via `'tagfunc'`, as Neovim does for LSP buffers): jump, open in a split, list all candidates, jump by name, preview without leaving the file |
 | `gu` / `grr`          | Find usages → quickfix panel at the bottom (mentions in comments / KDoc skipped) |
@@ -226,10 +226,14 @@ lua/kotlin-lite/
 ├── init.lua      -- setup()/init(), autocmds, user commands
 ├── config.lua    -- defaults + option merging
 ├── jars.lua      -- *-sources.jar discovery, extraction, read-only cache
-├── search.lua    -- ripgrep + Kotlin decl patterns + in-buffer search
+├── search.lua    -- ripgrep (+ parallel / cancellable engine) + Kotlin decl patterns + in-buffer search
+├── scope.lua     -- file structure: comments / strings masked, {} blocks, where a decl is visible
+├── resolve.lua   -- gd / K / gri / tagfunc: receivers, named args, overloads, owner classes, ranking;
+│                    each result carries its symbol (kind, owners, package, visibility, expect/actual)
+├── reader.lua    -- file reads for one request, shared by resolve and impl
 ├── defs.lua      -- gd picker rows: newest jar version only, expect/actual columns
 ├── imports.lua   -- file header (package/imports) -> candidate ranking for gd / K / gK
-├── impl.lua      -- gri: class header parsing, subtypes / overrides / actuals
+├── impl.lua      -- gri: class header parsing, subtypes / overrides / actuals of a resolved symbol
 ├── actions.lua   -- gd / K / gK / gr / rename / rename-file / structure / symbols / alternate / fqname / auto-import / format
 ├── runner.lua    -- run + test (bottom terminal, gradle init-script, quickfix)
 ├── keymaps.lua   -- buffer-local + global keymap attachment

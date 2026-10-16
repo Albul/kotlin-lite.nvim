@@ -58,6 +58,7 @@ local function parse(stdout)
                     lnum = tonumber(lnum),
                     col = tonumber(col),
                     text = vim.trim(text),
+                    indent = #text:match("^%s*"),
                 })
             end
         end
@@ -78,6 +79,52 @@ function M.rg_sync(extra, dirs)
     return parse(vim.system(rg_cmd(extra, dirs), { text = true }):wait().stdout)
 end
 
+--- Parallel, cancellable rg: start / await / cancel / run. `async`: await
+--- suspends the calling coroutine; else it blocks (tagfunc).
+function M.engine(async)
+    local E = {}
+    if async then
+        function E.start(extra, dirs)
+            local h = {}
+            h.obj = vim.system(rg_cmd(extra, dirs), { text = true }, function(res)
+                local items = parse(res.stdout)
+                vim.schedule(function()
+                    h.items = items
+                    local co = h.co
+                    h.co = nil
+                    if co then
+                        local ok, err = coroutine.resume(co, items)
+                        if not ok then
+                            vim.notify("kotlin-lite: " .. tostring(err), vim.log.levels.ERROR)
+                        end
+                    end
+                end)
+            end)
+            return h
+        end
+        function E.await(h)
+            if h.items then return h.items end
+            h.co = coroutine.running()
+            return coroutine.yield()
+        end
+    else
+        function E.start(extra, dirs)
+            return { obj = vim.system(rg_cmd(extra, dirs), { text = true }) }
+        end
+        function E.await(h)
+            h.items = h.items or parse(h.obj:wait().stdout)
+            return h.items
+        end
+    end
+    function E.cancel(h)
+        if not h.items then pcall(h.obj.kill, h.obj, 15) end
+    end
+    function E.run(extra, dirs)
+        return E.await(E.start(extra, dirs))
+    end
+    return E
+end
+
 -- project root + every extracted jar source tree
 function M.search_dirs()
     local dirs = { M.root() }
@@ -89,30 +136,30 @@ end
 -- in-buffer declaration search (vim regex via matchbufline)
 -------------------------------------------------------------------
 
--- vim-regex decl patterns for `w`, \zs sets match start at the name.
+-- vim-regex decl patterns for `w` (\zs at the name), tagged with their kind
 -- \C forces case-sensitivity (Kotlin ids differ by case; user 'ignorecase' must
 -- not make `Circle` match `circle`).
 function M.buffer_decl_patterns(w)
     local pats = {
         -- val / var (incl. generics and extension receiver)
-        [=[\<\%(val\|var\)\s\+\%(<[^>]*>\s\+\)\?\%([A-Za-z0-9_.<>?, ]\+\.\)\?\zs\<]=] .. w .. [=[\>]=],
+        { "val", [=[\<\%(val\|var\)\s\+\%(<[^>]*>\s\+\)\?\%([A-Za-z0-9_.<>?, ]\+\.\)\?\zs\<]=] .. w .. [=[\>]=] },
         -- destructuring declaration: val (a, b) = ...
-        [=[\<\%(val\|var\)\s\+(\%(\s*[A-Za-z0-9_]\+\s*,\)*\s*\zs\<]=] .. w .. [=[\>]=],
+        { "val", [=[\<\%(val\|var\)\s\+(\%(\s*[A-Za-z0-9_]\+\s*,\)*\s*\zs\<]=] .. w .. [=[\>]=] },
         -- fun declaration (incl. generics and extension receiver)
-        [=[\<fun\s\+\%(<[^>]*>\s\+\)\?\%([A-Za-z0-9_.<>?, ]\+\.\)\?\zs\<]=] .. w .. [=[\>\ze\s*(]=],
+        { "fun", [=[\<fun\s\+\%(<[^>]*>\s\+\)\?\%([A-Za-z0-9_.<>?, ]\+\.\)\?\zs\<]=] .. w .. [=[\>\ze\s*(]=] },
         -- class / interface / object / typealias
-        [=[\<\%(class\|interface\|object\|typealias\)\s\+\zs\<]=] .. w .. [=[\>]=],
+        { "type", [=[\<\%(class\|interface\|object\|typealias\)\s\+\zs\<]=] .. w .. [=[\>]=] },
         -- function / constructor / catch parameter: "(name:" or ", name:"
-        [=[[(,]\s*\%(vararg\s\+\|noinline\s\+\|crossinline\s\+\)\?\zs\<]=] .. w .. [=[\>\ze\s*:]=],
+        { "param", [=[[(,]\s*\%(vararg\s\+\|noinline\s\+\|crossinline\s\+\)\?\zs\<]=] .. w .. [=[\>\ze\s*:]=] },
         -- parameter on its own line in a multi-line signature: "name: Type,"
-        [=[^\s*\zs\<]=] .. w .. [=[\>\ze\s*:[^:]]=],
+        { "param", [=[^\s*\zs\<]=] .. w .. [=[\>\ze\s*:[^:]]=] },
         -- lambda parameter: "name ->" or "name: Type ->"
-        [=[\zs\<]=] .. w .. [=[\>\ze\s*\%(:\s*[A-Za-z0-9_.<>?]\+\s*\)\?->]=],
+        { "lambda", [=[\zs\<]=] .. w .. [=[\>\ze\s*\%(:\s*[A-Za-z0-9_.<>?]\+\s*\)\?->]=] },
         -- for-loop variable: "for (name in ...)"
-        [=[\<for\s*(\s*\zs\<]=] .. w .. [=[\>\ze\s\+in\>]=],
+        { "param", [=[\<for\s*(\s*\zs\<]=] .. w .. [=[\>\ze\s\+in\>]=] },
     }
     for i, p in ipairs(pats) do
-        pats[i] = [=[\C]=] .. p
+        pats[i] = { kind = p[1], re = [=[\C]=] .. p[2] }
     end
     return pats
 end
@@ -123,43 +170,35 @@ function M.is_comment_text(line)
     return stripped:sub(1, 2) == "//" or stripped:sub(1, 1) == "*" or stripped:sub(1, 2) == "/*"
 end
 
-function M.is_comment_line(buf, lnum)
-    return M.is_comment_text(vim.api.nvim_buf_get_lines(buf, lnum - 1, lnum, false)[1] or "")
-end
-
--- `word`'s declaration in the current buffer: nearest one at/above the cursor,
--- else the first below. Returns { lnum, col (0-based) } or nil.
-function M.decl_in_buffer(word)
+--- `word`'s declaration in the current buffer visible at the cursor (or
+--- lnum, 0-based col `s`) by lexical scope; in a comment, the nearest one.
+function M.decl_in_buffer(word, sc, lnum, s)
+    local scope = require("kotlin-lite.scope")
     local buf = vim.api.nvim_get_current_buf()
-    local cur = vim.api.nvim_win_get_cursor(0)
-    local cur_lnum, cur_col = cur[1], cur[2] -- col is 0-based
-
-    local matches, seen = {}, {}
-    for _, pat in ipairs(M.buffer_decl_patterns(word)) do
-        local ok, found = pcall(vim.fn.matchbufline, buf, pat, 1, "$")
-        if ok then
-            for _, m in ipairs(found) do
-                -- skip the decl the cursor sits on -> fall through to project search
-                local on_cursor = m.lnum == cur_lnum
-                    and cur_col >= m.byteidx
-                    and cur_col < m.byteidx + #word
-                local key = m.lnum .. ":" .. m.byteidx
-                if not on_cursor and not seen[key] and not M.is_comment_line(buf, m.lnum) then
-                    seen[key] = true
-                    table.insert(matches, { lnum = m.lnum, col = m.byteidx })
-                end
-            end
+    sc = sc or scope.scan(vim.api.nvim_buf_get_lines(buf, 0, -1, false))
+    if not lnum then
+        local cur = vim.api.nvim_win_get_cursor(0)
+        local line = vim.api.nvim_get_current_line()
+        lnum, s = cur[1], cur[2]
+        while s > 0 and line:sub(s, s):match("[%w_]") do s = s - 1 end
+        if line:sub(s + 1, s + #word) ~= word then
+            s = (line:find(word, cur[2] + 1, true) or cur[2] + 1) - 1
         end
     end
-    if #matches == 0 then return nil end
+    local here = scope.key(lnum, s)
 
-    table.sort(matches, function(a, b)
-        if a.lnum ~= b.lnum then return a.lnum < b.lnum end
-        return a.col < b.col
-    end)
-    local target = matches[1]
-    for _, m in ipairs(matches) do
-        if m.lnum <= cur_lnum then target = m else break end
+    local decls = scope.decls(sc, word)
+    local d = scope.visible(decls, here, here)
+    if d then return d end
+
+    if (sc.mask[lnum] or ""):sub(s + 1, s + #word) == word then return nil end
+    -- comment: nearest above, else first below
+    local target
+    for _, x in ipairs(decls) do
+        if scope.key(x.lnum, x.col) ~= here then
+            if not target or x.lnum <= lnum then target = x end
+            if x.lnum > lnum then break end
+        end
     end
     return target
 end

@@ -28,17 +28,20 @@ function M.line_of(needle)
     error("line not found: " .. needle, 2)
 end
 
---- Put the cursor on the first occurrence of `word` on line `lnum`.
-function M.cursor_on(lnum, word)
+--- Put the cursor on the `nth` (default first) occurrence of `word` on line `lnum`.
+function M.cursor_on(lnum, word, nth)
     local line = vim.api.nvim_buf_get_lines(0, lnum - 1, lnum, false)[1]
-    local col = line:find(word, 1, true)
-    assert(col, ("'%s' not on line %d: %s"):format(word, lnum, line))
+    local col = 0
+    for _ = 1, nth or 1 do
+        col = line:find(word, col + 1, true)
+        assert(col, ("'%s' not on line %d: %s"):format(word, lnum, line))
+    end
     vim.api.nvim_win_set_cursor(0, { lnum, col - 1 })
 end
 
---- Cursor on `word` in the first line containing `needle`.
-function M.cursor_at(needle, word)
-    M.cursor_on(M.line_of(needle), word)
+--- Cursor on the `nth` (default first) `word` in the first line containing `needle`.
+function M.cursor_at(needle, word, nth)
+    M.cursor_on(M.line_of(needle), word, nth)
 end
 
 function M.bufname()

@@ -65,13 +65,13 @@ describe("'tagfunc'", function()
         assert.are.equal(vim.NIL, actions.tagfunc("^Cir", "r"))
     end)
 
-    it("class in another file, best first, cmd addresses line + column", function()
+    it("class in another file, best first, cmd addresses the name's line + column", function()
         h.open("Main.kt")
         h.cursor_at("Circle(radius)", "Circle")
         local tags = actions.tagfunc("Circle", "c")
         assert.matches("Geometry%.kt$", tags[1].filename)
         assert.are.equal("Circle", tags[1].name)
-        assert.are.equal("/\\%8l\\%1c/", tags[1].cmd)
+        assert.are.equal("/\\%8l\\%7c/", tags[1].cmd) -- class Circle: on `Circle`
     end)
 
     it("local decl from the buffer", function()

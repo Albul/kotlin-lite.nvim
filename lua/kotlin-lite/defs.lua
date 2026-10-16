@@ -41,7 +41,8 @@ end
 M._jar_info = jar_info
 
 -- Keep jar matches only from the newest extracted version of each artifact.
--- Project matches and distinct artifacts (kotlin-stdlib vs -jdk8) are kept.
+-- A source file shipped in several artifacts (KMP common sources) counts once,
+-- from the shortest artifact name (ui-graphics over ui-graphics-desktop).
 function M.latest_only(items)
     local labels, newest = {}, {}
     for _, it in ipairs(items) do
@@ -51,10 +52,24 @@ function M.latest_only(items)
             if not cur or jars._ver_lt(cur, j.version) then newest[j.artifact] = j.version end
         end
     end
-    return vim.tbl_filter(function(it)
+    local kept = vim.tbl_filter(function(it)
         local j = jar_info(it.filename, labels)
         return not j or newest[j.artifact] == j.version
     end, items)
+
+    local base = {} -- "rel:lnum" -> item
+    for _, it in ipairs(kept) do
+        local j = jar_info(it.filename, labels)
+        if j then
+            local key = j.rel .. ":" .. it.lnum
+            local cur = base[key]
+            if not cur or #j.artifact < #jar_info(cur.filename, labels).artifact then base[key] = it end
+        end
+    end
+    return vim.tbl_filter(function(it)
+        local j = jar_info(it.filename, labels)
+        return not j or base[j.rel .. ":" .. it.lnum] == it
+    end, kept)
 end
 
 -------------------------------------------------------------------

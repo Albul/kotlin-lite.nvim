@@ -93,6 +93,28 @@ function M.rank_items(ctx, word, items)
     return best
 end
 
+-- import line under the cursor -> { name, qualifier } of the segment's class
+-- (else of the imported decl), or { wildcard = "a.b" }
+function M.import_target(line, word)
+    local path, alias = line:match("^%s*import%s+([%w_.]+)%s+as%s+([%w_]+)")
+    path = path or line:match("^%s*import%s+([%w_.]+)")
+    if not path then return nil end
+    if path:sub(-1) == "." then return { wildcard = path:sub(1, -2) } end
+    local segs = vim.split(path, ".", { plain = true })
+    local whole = { name = segs[#segs], qualifier = table.concat(segs, ".", 1, #segs - 1) }
+    if alias == word then return whole end
+    -- class segments start at the first capital
+    local first = #segs
+    for i, seg in ipairs(segs) do
+        if seg:match("^%u") then first = i break end
+    end
+    for i = #segs, first, -1 do
+        if segs[i] == word then
+            return { name = word, qualifier = table.concat(segs, ".", 1, i - 1) }
+        end
+    end
+    return whole
+end
 --- Header of the current buffer.
 function M.current()
     return M.parse(vim.api.nvim_buf_get_lines(0, 0, 200, false))
