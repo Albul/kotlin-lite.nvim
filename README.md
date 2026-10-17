@@ -48,6 +48,12 @@ gradle / maven caches are searched at most once a day (`:KotlinSourcesClear`
 resets that), plain startups do no disk work. Customize via `essentials`, disable
 with `auto_extract = false`.
 
+Folds: with treesitter folding (`foldexpr = "v:lua.vim.treesitter.foldexpr()"`)
+the plugin's `queries/kotlin/folds.scm` extends the nvim-treesitter one: KDoc and
+`/* */` comments, multi-line arguments of a call and parameters of a `fun`, the
+`try` / `catch` / `finally` blocks and multi-line strings fold too. A file opened
+before the plugin loads (`event = "VeryLazy"`) gets them once it does.
+
 ## Requirements
 
 - Neovim ≥ 0.10
@@ -258,6 +264,7 @@ lua/kotlin-lite/
 ├── picker.lua    -- case-insensitive list picker (snacks, else vim.ui.select)
 └── snacks.lua    -- optional snacks.nvim explorer integration (loaded lazily)
 plugin/kotlin-lite.lua  -- startup bootstrap
+queries/kotlin/folds.scm -- extra treesitter folds (comments, arguments, try / catch)
 tests/                  -- fixtures, interactive harness, busted specs (*_spec.lua)
 ```
 

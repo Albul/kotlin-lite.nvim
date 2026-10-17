@@ -29,6 +29,17 @@ local function start(root)
     vim.schedule(function() require("kotlin-lite.jars").auto_extract(root) end)
 end
 
+-- Treesitter folds of a buffer opened before the plugin was on 'runtimepath'
+-- miss its queries/kotlin/folds.scm. Setting the options again drops nvim's
+-- query cache and recomputes the folds; scheduled, as OptionSet doesn't fire
+-- inside the autocmd that loads the plugin (lazy's VeryLazy).
+local function refresh_folds()
+    vim.schedule(function()
+        vim.go.runtimepath = vim.go.runtimepath
+        vim.go.foldminlines = vim.go.foldminlines
+    end)
+end
+
 -- (re)register the FileType autocmd and attach to already-open buffers
 local function register()
     local config = require("kotlin-lite.config")
@@ -45,12 +56,15 @@ local function register()
         pattern = config.options.filetypes,
         callback = function(ev) attach(ev.buf) end,
     })
+    local open = false
     for _, buf in ipairs(vim.api.nvim_list_bufs()) do
         if vim.api.nvim_buf_is_loaded(buf)
             and vim.tbl_contains(config.options.filetypes, vim.bo[buf].filetype) then
             attach(buf)
+            open = true
         end
     end
+    if open then refresh_folds() end
 end
 
 -- one-time bootstrap: autocmds and user commands only (cheap, no disk scans)
