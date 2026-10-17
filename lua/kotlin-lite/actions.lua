@@ -877,7 +877,8 @@ end
 -------------------------------------------------------------------
 -- Always whole-file: ktlint reindents from column 0, so piping a partial range
 -- would flatten nested declarations. stdout replaces the buffer; stderr (logs)
--- is dropped.
+-- is dropped. Runs in the file's directory: ktlint reads stdin's .editorconfig
+-- from its cwd.
 function M.format_buffer()
     local prg = cfg().formatprg
     if not prg or prg == "" then
@@ -886,9 +887,12 @@ function M.format_buffer()
     end
     local buf = vim.api.nvim_get_current_buf()
     local input = table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n") .. "\n"
+    local name = vim.api.nvim_buf_get_name(buf)
+    local dir = name ~= "" and vim.fs.dirname(name) or nil
+    if dir and vim.fn.isdirectory(dir) == 0 then dir = nil end
 
     local ok, res = pcall(function()
-        return vim.system(vim.split(prg, "%s+"), { stdin = input, text = true }):wait()
+        return vim.system(vim.split(prg, "%s+"), { stdin = input, text = true, cwd = dir }):wait()
     end)
     if not ok then
         vim.notify("kotlin-lite: formatter failed to start: " .. tostring(res), vim.log.levels.ERROR)
