@@ -64,14 +64,20 @@ local function has_main(bufnr)
     return false
 end
 
--- open `shell_cmd` in a fresh bottom split terminal at `cwd`; on_exit(code, buf)
+-- open `shell_cmd` in a fresh bottom split terminal at `cwd`; on_exit(code, buf).
+-- What kotlinc reports on the way becomes diagnostics.
 local function open_term(shell_cmd, cwd, on_exit)
     vim.cmd("botright " .. (cfg().run.height or 15) .. "new")
     local buf = vim.api.nvim_get_current_buf()
+    local output = require("kotlin-lite.compiler").collector(cwd)
     vim.fn.jobstart({ vim.o.shell, vim.o.shellcmdflag, shell_cmd }, {
         term = true,
         cwd = cwd,
-        on_exit = on_exit and vim.schedule_wrap(function(_, code) on_exit(code, buf) end) or nil,
+        on_stdout = output.on_stdout,
+        on_exit = vim.schedule_wrap(function(_, code)
+            output.done()
+            if on_exit then on_exit(code, buf) end
+        end),
     })
     vim.cmd("startinsert")
 end

@@ -48,6 +48,12 @@ gradle / maven caches are searched at most once a day (`:KotlinSourcesClear`
 resets that), plain startups do no disk work. Customize via `essentials`, disable
 with `auto_extract = false`.
 
+Compiler errors: whatever kotlinc reports while a run / test of `<leader>kr` /
+`<leader>kR` / `<leader>kt` / `<leader>kT` compiles (`e:` / `w:` lines of gradle,
+`path:line:col: error:` of a plain `kotlinc`) becomes `vim.diagnostic` errors and
+warnings in those files — `]e` / `]d`, `<leader>cd`, the sign column — with a note
+of how many. They stay until the next run, which replaces them.
+
 Folds: with treesitter folding (`foldexpr = "v:lua.vim.treesitter.foldexpr()"`)
 the plugin's `queries/kotlin/folds.scm` extends the nvim-treesitter one: KDoc and
 `/* */` comments, multi-line arguments of a call and parameters of a `fun`, the
@@ -260,6 +266,7 @@ lua/kotlin-lite/
 ├── impl.lua      -- gri: class header parsing, subtypes / overrides / actuals of a resolved symbol
 ├── actions.lua   -- gd / K / gK / gr / rename / rename-file / structure / symbols / alternate / fqname / auto-import / format
 ├── runner.lua    -- run + test (bottom terminal, gradle init-script, quickfix)
+├── compiler.lua  -- kotlinc errors / warnings in a run's output -> vim.diagnostic
 ├── keymaps.lua   -- buffer-local + global keymap attachment
 ├── picker.lua    -- case-insensitive list picker (snacks, else vim.ui.select)
 └── snacks.lua    -- optional snacks.nvim explorer integration (loaded lazily)
