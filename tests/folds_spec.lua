@@ -18,9 +18,13 @@ local function fold_at(lnum)
     vim.wo.foldenable = true
     vim.wo.foldlevel = 99
     vim.treesitter.get_parser(0, "kotlin"):parse()
-    vim.cmd("normal! zx")
-    vim.api.nvim_win_set_cursor(0, { lnum, 0 })
-    vim.cmd("silent! normal! zc")
+    -- treesitter updates the folds in a vim.schedule() callback
+    h.wait(function()
+        vim.cmd("normal! zx")
+        vim.api.nvim_win_set_cursor(0, { lnum, 0 })
+        vim.cmd("silent! normal! zc")
+        return vim.fn.foldclosed(lnum) ~= -1
+    end, 1000)
     return vim.fn.foldclosed(lnum) .. "-" .. vim.fn.foldclosedend(lnum)
 end
 
