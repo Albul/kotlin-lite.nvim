@@ -60,6 +60,24 @@ the plugin's `queries/kotlin/folds.scm` extends the nvim-treesitter one: KDoc an
 `try` / `catch` / `finally` blocks and multi-line strings fold too. A file opened
 before the plugin loads (`event = "VeryLazy"`) gets them once it does.
 
+Breadcrumbs: `require("kotlin-lite.breadcrumbs").get()` is where the cursor is —
+`Counter › Companion › zero` — the classes and the function / property around it,
+"" outside Kotlin / Java buffers. Show it in the statusline, where LazyVim puts
+the LSP symbols of other languages:
+
+```lua
+{
+    "nvim-lualine/lualine.nvim",
+    opts = function(_, opts)
+        table.insert(opts.sections.lualine_c, {
+            function() return require("kotlin-lite.breadcrumbs").get() end,
+        })
+    end,
+}
+```
+
+or in the winbar: `vim.o.winbar = "%{v:lua.require'kotlin-lite.breadcrumbs'.get()}"`.
+
 ## Requirements
 
 - Neovim ≥ 0.10
@@ -260,6 +278,8 @@ lua/kotlin-lite/
 ├── gradle.lua    -- BuildConfig.X, libs.x, projects.x -> build files, version catalog, modules
 ├── usages.lua    -- gu / rename: the occurrences that mean the resolved declaration
 ├── highlight.lua -- occurrences of the symbol under the cursor, highlighted on CursorHold
+├── calls.lua     -- incoming calls: the function / property a usage is in
+├── breadcrumbs.lua -- Counter › Companion › zero for the statusline
 ├── textobj.lua   -- af / if / ac / ic from scope blocks
 ├── defs.lua      -- gd picker rows: newest jar version only, expect/actual columns
 ├── imports.lua   -- file header (package/imports) -> candidate ranking for gd / K / gK

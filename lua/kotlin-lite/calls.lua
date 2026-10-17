@@ -5,10 +5,11 @@ local scope = require("kotlin-lite.scope")
 
 local M = {}
 
--- the name of `fun name(`, `fun Recv.name(`, ``fun `a name`(``
+-- the name of `fun name(`, `fun <T> Recv<T>.name(`, ``fun `a name`(``
 local function declared_fun(s, prefix)
-    return s:match(prefix .. "%f[%w_]fun%s+[^(`]-(`[^`]+`)%s*[(<]")
-        or s:match(prefix .. "%f[%w_]fun%s+[^(]-([%w_]+)%s*[(<]")
+    s = s:gsub("%b<>", "")
+    return s:match(prefix .. "%f[%w_]fun%s+[^(`]-(`[^`]+`)%s*%(")
+        or s:match(prefix .. "%f[%w_]fun%s+[^(]-([%w_]+)%s*%(")
 end
 
 local function fun_name(head)
@@ -17,8 +18,15 @@ local function fun_name(head)
     return declared_fun(head, "") or head:match("%f[%w_]([gs]et)%s*%b()%s*$")
 end
 
--- `fun x` / `val x` starting on a line of a class or file body
-local function member_on(line)
+local function declares_type(line)
+    line = line:gsub("::%s*class", "")
+    return line:find("%f[%w_]class%f[^%w_]") or line:find("%f[%w_]interface%f[^%w_]")
+        or line:find("%f[%w_]object%f[^%w_]")
+end
+
+--- `fun x` / `val x` starting on a line of a class or file body
+function M.member_on(line)
+    line = line:gsub("%b<>", "")
     return declared_fun(line, "^[%w_%s@]-")
         or line:match("^[%w_%s@]-%f[%w_]va[lr]%s+[%w_.]-([%w_]+)%f[^%w_.]")
 end
@@ -29,30 +37,55 @@ local function member_at(sc, b, l)
     for k = l, scope.unkey(b.open) + 1, -1 do
         local m = sc.mask[k]
         if m:find("%S") and #m:match("^%s*") <= ind then
-            local name = member_on(m)
-            if name then return name end
+            local name = M.member_on(m)
+            if name or declares_type(m) then return name end
             ind = #m:match("^%s*")
         end
     end
 end
 
---- "Outer.Inner.fun" for the code at line `l`, col `c` of `sc`
-function M.caller(sc, l, c, java)
-    local names, fun, from = {}, nil, l
+local function type_name(b)
+    return b.name or (b.companion and "Companion")
+end
+
+--- { "Outer", "Inner", "fun" } for the code at line `l`, col `c` of `sc`
+function M.path(sc, l, c, java)
+    local names, fun, done, from = {}, nil, false, l
     for _, b in ipairs(scope.enclosing(sc, scope.key(l, c))) do
         if b.kind == "type" then
-            if not fun then fun = member_at(sc, b, from) end
-            local name = b.name or (b.companion and "Companion")
+            if not done then fun, done = member_at(sc, b, from), true end
+            local name = type_name(b)
             if name then table.insert(names, 1, name) end
-        elseif not fun and b.kind == "fun" then
+        elseif not done and b.kind == "fun" then
             fun = fun_name(b.head)
-        elseif not fun and b.kind == "lambda" then
-            if java then fun = b.callee else from = scope.unkey(b.open) end
+            done = fun ~= nil
+        elseif not done and b.kind == "lambda" then
+            if java then
+                fun = b.callee
+                done = fun ~= nil
+            else
+                from = scope.unkey(b.open)
+            end
         end
     end
-    fun = fun or member_at(sc, sc.root, from)
+    if not done then fun = member_at(sc, sc.root, from) end
     names[#names + 1] = fun
-    return table.concat(names, ".")
+    return names
+end
+
+--- { "Outer", "Inner" }: the classes around position `p` (a scope key)
+function M.types(sc, p)
+    local names = {}
+    for _, b in ipairs(scope.enclosing(sc, p)) do
+        local name = b.kind == "type" and type_name(b)
+        if name then table.insert(names, 1, name) end
+    end
+    return names
+end
+
+--- "Outer.Inner.fun" for the code at line `l`, col `c` of `sc`
+function M.caller(sc, l, c, java)
+    return table.concat(M.path(sc, l, c, java), ".")
 end
 
 local function is_import(it)
