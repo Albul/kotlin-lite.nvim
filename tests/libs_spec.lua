@@ -264,7 +264,43 @@ describe("gd with several versions extracted", function()
         jars.scan_cache()
         gd("libs/server/src/main/kotlin/libsdemo/Server.kt", "fun libsFlow()", "Flow<")
         assert.are.equal(pinned .. "/commonMain/kotlinx/coroutines/flow/Flow.kt", h.bufname())
-    end)    it("the jvm actual in a source set not named *Main (jvmJUnit5)", function()
+    end)    it("a companion member of a class whose constructor has a line of its own", function()
+        local dir = lib("org.jetbrains.kotlin", "kotlin-stdlib-2.0.0-sources.jar", {
+            ["commonMain/kotlin/time/Duration.kt"] = {
+                "package kotlin.time", "",
+                "public value class Duration",
+                "internal constructor(private val rawValue: Long) :",
+                "    Comparable<Duration> {",
+                "    public companion object {",
+                "        public val ZERO: Duration = Duration(0L)",
+                "    }",
+                "}",
+            } })
+        jars.scan_cache()
+        gd("libs/server/src/main/kotlin/libsdemo/Server.kt", "import kotlin.time.Duration.Companion.ZERO", "ZERO")
+        assert.are.equal(dir .. "/commonMain/kotlin/time/Duration.kt", h.bufname())
+        assert.are.equal(7, h.cur_line())
+        gd("libs/server/src/main/kotlin/libsdemo/Server.kt", "fun libsZero()", "ZERO")
+        assert.are.equal(7, h.cur_line())
+    end)
+    it("a member of a java interface with its brace on a line of its own", function()
+        local dir = lib("com.example", "pathy-1.0-sources.jar", {
+            ["com/example/pathy/Pathy.java"] = {
+                "package com.example.pathy;", "",
+                "public interface Pathy",
+                "    extends Comparable<Pathy>",
+                "{",
+                "    default String asText() {",
+                "        return null;",
+                "    }",
+                "}",
+            } })
+        jars.scan_cache()
+        gd("libs/server/src/main/kotlin/libsdemo/Server.kt", "fun libsPathy(", "asText")
+        assert.are.equal(dir .. "/com/example/pathy/Pathy.java", h.bufname())
+        assert.are.equal(6, h.cur_line())
+    end)
+    it("the jvm actual in a source set not named *Main (jvmJUnit5)", function()
         lib("org.jetbrains.kotlin", "kotlin-test-2.4.20-sources.jar", { ["annotationsCommonMain/kotlin.test/Annotations.kt"] = {
             "package kotlin.test", "", "public expect annotation class Test()" } })
         local junit5 = lib("org.jetbrains.kotlin", "kotlin-test-junit5-2.4.20-sources.jar", {

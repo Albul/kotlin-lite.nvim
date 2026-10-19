@@ -119,3 +119,82 @@ describe("auto-import", function()
         end)
     end)
 end)
+
+describe("autoimport.owners", function()
+    local function names(lines, needle)
+        for i, l in ipairs(lines) do
+            if l:find(needle, 1, true) then
+                local chain = autoimport.owners(lines, i)
+                return chain and table.concat(vim.tbl_map(function(o) return o.name end, chain), " < ") or nil
+            end
+        end
+    end
+
+    it("a one-line header", function()
+        assert.are.equal("A", names({ "class A {", "    val x = 1", "}" }, "val x"))
+    end)
+    it("a member of a fun body: local", function()
+        assert.is_nil(names({ "class A {", "    fun f() {", "        val x = 1", "    }", "}" }, "val x"))
+    end)
+    it("the primary constructor on a line of its own (kotlin.time.Duration)", function()
+        local lines = {
+            "@JvmInline",
+            "public value class Duration",
+            "// a comment",
+            '@Deprecated("x", level = DeprecationLevel.ERROR)',
+            "internal constructor(private val rawValue: Long) :",
+            "    Comparable<Duration> {",
+            "",
+            "    public companion object {",
+            "        public val ZERO: Duration = Duration(0L)",
+            "        public inline val Int.days: Duration get() = TODO()",
+            "    }",
+            "}",
+        }
+        assert.are.equal("Companion < Duration", names(lines, "val ZERO"))
+        assert.are.equal("Companion < Duration", names(lines, "Int.days"))
+    end)
+    it("a multi-line constructor", function()
+        local lines = {
+            "public class Foo",
+            "private constructor(",
+            "    val a: Int = 0,",
+            ") {",
+            "    fun bar() = a",
+            "}",
+        }
+        assert.are.equal("Foo", names(lines, "fun bar"))
+    end)
+    it("the brace on a line of its own after extends (java.nio.file.Path)", function()
+        local lines = {
+            "public interface Path",
+            "    extends Comparable<Path>, Iterable<Path>, Watchable",
+            "{",
+            "    default File toFile() {",
+            "        return null;",
+            "    }",
+            "}",
+        }
+        assert.are.equal("Path", names(lines, "File toFile"))
+        assert.is_nil(names(lines, "return null"))
+    end)
+    it("a java method with its brace on a line of its own: still local", function()
+        local lines = { "class A {", "    void f()", "    {", "        int x = 1;", "    }", "}" }
+        assert.is_nil(names(lines, "int x"))
+    end)
+    it("a secondary constructor's body: local, even after a nested class without a body", function()
+        local lines = {
+            "class A {",
+            "    class B",
+            "    constructor(y: Int) : this() {",
+            "        val z = y",
+            "    }",
+            "}",
+        }
+        assert.is_nil(names(lines, "val z"))
+    end)
+    it("a header closed by its brace above: no continuation", function()
+        local lines = { "class A {", "}", "internal constructor(x: Int) {", "    val z = x", "}" }
+        assert.is_nil(names(lines, "val z"))
+    end)
+end)

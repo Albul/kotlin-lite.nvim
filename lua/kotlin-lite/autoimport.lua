@@ -60,6 +60,30 @@ local function skippable(s)
         or s:sub(1, 2) == "/*" or s:sub(1, 1) == "@"
 end
 
+-- lines a header can run on for
+local CONTINUATION = 8
+
+-- line `l` (no header itself) continues a header left open above, at its
+-- indent: the line of that header, else nil. `internal constructor(...) :`
+-- after `class X`, a lone `{` after `interface X` + `extends ...`; not a
+-- secondary constructor (`: this(...)`) or a statement: what lies between
+-- holds no brace or `;`
+local function continued(lines, l)
+    local own = vim.trim(lines[l])
+    local delegate = own:match("%f[%w_]constructor%s*%b()%s*:%s*([%a]+)%s*%(")
+    if delegate == "this" or delegate == "super" then return nil end
+    for k = l - 1, math.max(1, l - CONTINUATION), -1 do
+        local s = vim.trim((lines[k]:gsub("//.*$", "")))
+        if not skippable(s) then
+            if M.header_of(s) then
+                return not s:find("{", 1, true) and indent(lines[k]) == indent(lines[l]) and k or nil
+            end
+            if s:find("[{};]") then return nil end
+        end
+    end
+    return nil
+end
+
 --- Enclosing declarations of line `lnum`, innermost first, with their header
 --- lines. nil when the line is local (inside a fun / init / getter / lambda).
 function M.owners(lines, lnum)
@@ -71,7 +95,14 @@ function M.owners(lines, lnum)
         local s = vim.trim(line)
         if not skippable(s) and indent(line) < want then
             local h = M.header_of(line)
-            if not h then return nil end
+            if not h then
+                -- a header on several lines: the line that names it
+                local k = continued(lines, l)
+                if not k then return nil end
+                l, line = k, lines[k]
+                s = vim.trim(line)
+                h = M.header_of(line)
+            end
             h.text = s
             chain[#chain + 1] = h
             want = indent(line)
