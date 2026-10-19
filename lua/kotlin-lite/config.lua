@@ -41,6 +41,8 @@ M.defaults = {
     tagfunc = true,
     -- on CursorHold, highlight the occurrences of the symbol under the cursor
     highlight_references = true,
+    -- hint (greyed out) the imports nothing uses
+    unused_imports = true,
     -- af / if (fun), ac / ic (class / object) text objects
     textobjects = false,
     -- also register IntelliJ-style keymaps on top of the vim ones
@@ -106,6 +108,7 @@ M.defaults = {
         rename             = { "<leader>cr", "grn" }, -- grn (rename) alias
         rename_file        = "<leader>cR",
         format             = "<leader>cf",
+        organize_imports   = "<leader>co",
         file_structure     = { "<leader>cs", "gO" }, -- gO (document_symbol) alias
         project_symbols    = "<leader>cS",
         reveal_in_explorer = "<leader>ke",

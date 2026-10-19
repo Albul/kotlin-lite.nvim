@@ -27,6 +27,7 @@ or unavailable, and for reading library sources extracted from `*-sources.jar`.
 | `<leader>ke`          | Reveal current file in the [snacks.nvim] explorer (IntelliJ `Alt+F1`)  |
 | `<leader>ka`          | Alternate file: `X.kt` ⇄ `XTest.kt` — searches the module for the `Test`-suffixed counterpart wherever it lives, and offers to scaffold it if absent |
 | `<leader>cf`          | Format the whole buffer via `formatprg` (ktlint by default)            |
+| `<leader>co`          | Organize imports: drop the unused ones, sort the rest the way ktlint / IntelliJ do (everything else, `java`, `javax`, `kotlin`, then aliases); with comments among the imports only the unused lines go |
 | `<leader>kc`          | Copy the fully-qualified name of the declaration under the cursor (`pkg.Owner.member`), else of the file (`package.ClassName`), to the `+` register |
 | `<leader>ki`          | Auto-import the symbol under the cursor from the project + extracted jar sources: classes (incl. nested — `Outer.Nested`), top-level `fun` / `val` / `const val` (incl. extensions — after a `.` only extensions are offered), members of `object`s and companions, enum entries, Java `static` members. Private / class-member / local declarations and names the file already sees (default `kotlin.*` imports, same package, `*` imports) are skipped; several candidates → picker with signature and origin. A name that already resolves without an import (a member of the enclosing class or its supertypes, a declaration of this file) gets a note instead |
 | `<leader>kr`          | Run the current file (needs a top-level `main()`) in a bottom terminal split |
@@ -62,6 +63,13 @@ Compiler errors: whatever kotlinc reports while a run / test of `<leader>kr` /
 `path:line:col: error:` of a plain `kotlinc`) becomes `vim.diagnostic` errors and
 warnings in those files — `]e` / `]d`, `<leader>cd`, the sign column — with a note
 of how many. They stay until the next run, which replaces them.
+
+Unused imports: an import whose name the code doesn't mention (comments and
+strings don't count, a KDoc `[Link]` does), or a repeated one, is a greyed-out
+hint (`vim.diagnostic`, tagged unnecessary), updated after each edit outside
+insert mode. Star imports and operator conventions (`getValue`, `plus`,
+`invoke`, `componentN`, ...), used through syntax rather than by name, are never
+flagged. Off with `unused_imports = false`.
 
 Folds: with treesitter folding (`foldexpr = "v:lua.vim.treesitter.foldexpr()"`)
 the plugin's `queries/kotlin/folds.scm` extends the nvim-treesitter one: KDoc and
@@ -132,6 +140,7 @@ require("kotlin-lite").setup({
     project_keymaps = true,                 -- expose project-level maps globally in a gradle project
     tagfunc = true,                         -- <C-]> / :tag / :ptag resolve like gd in kotlin buffers
     highlight_references = true,            -- on CursorHold, highlight the symbol's occurrences (by scope)
+    unused_imports = true,                  -- grey out the imports nothing uses
     textobjects = false,                    -- af / if (fun), ac / ic (class / object) text objects
     -- essentials = { kotlin = {...}, android = {...} }, -- artifact names to auto-extract
     run = {
@@ -153,6 +162,7 @@ require("kotlin-lite").setup({
         rename             = "<leader>cr",
         rename_file        = "<leader>cR",
         format             = "<leader>cf",
+        organize_imports   = "<leader>co",
         file_structure     = "<leader>cs",
         project_symbols    = "<leader>cS",
         reveal_in_explorer = "<leader>ke",
@@ -192,6 +202,7 @@ vim maps above):
 | `<S-F6>`       | Rename symbol                                  |
 | `<C-A-h>`      | Incoming calls                                 |
 | `<C-A-l>`      | Format buffer                                  |
+| `<C-A-o>`      | Organize imports                               |
 | `<C-S-t>`      | Alternate file (go to test)                    |
 | `<M-CR>`       | Auto-import under cursor (Alt+Enter)           |
 | `<C-/>`        | Toggle comment (built-in `gc`)                |
@@ -293,6 +304,7 @@ lua/kotlin-lite/
 ├── textobj.lua   -- af / if / ac / ic from scope blocks
 ├── defs.lua      -- gd picker rows: newest jar version only, expect/actual columns
 ├── imports.lua   -- file header (package/imports) -> candidate ranking for gd / K / gK
+├── organize.lua  -- unused imports (hints) and organize imports
 ├── impl.lua      -- gri: class header parsing, subtypes / overrides / actuals of a resolved symbol
 ├── actions.lua   -- gd / K / gK / gr / rename / rename-file / structure / symbols / alternate / fqname / auto-import / format
 ├── runner.lua    -- run + test (bottom terminal, gradle init-script, quickfix)

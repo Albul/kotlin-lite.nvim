@@ -21,6 +21,7 @@ local function specs()
         rename             = { actions.rename,                 "Rename symbol (kotlin-lite)" },
         rename_file        = { actions.rename_file,            "Rename file (kotlin-lite)" },
         format             = { actions.format_buffer,          "Format buffer (kotlin-lite)" },
+        organize_imports   = { function() require("kotlin-lite.organize").organize() end, "Organize imports (kotlin-lite)" },
         file_structure     = { actions.file_structure,         "File structure (kotlin-lite)" },
         project_symbols    = { actions.project_symbols,        "Project symbols (kotlin-lite)" },
         reveal_in_explorer = { function() require("kotlin-lite.snacks").reveal() end, "Reveal in explorer (kotlin-lite)" },
@@ -85,6 +86,7 @@ function M.attach(buf)
     end
 
     if opts.highlight_references then require("kotlin-lite.highlight").attach(buf) end
+    if opts.unused_imports then require("kotlin-lite.organize").attach(buf) end
     if opts.textobjects then require("kotlin-lite.textobj").attach(buf) end
 
     if opts.tagfunc then
@@ -101,6 +103,7 @@ function M.attach(buf)
         map("<S-F6>", actions.rename, "Rename symbol (IntelliJ)")
         map("<C-A-h>", actions.incoming_calls, "Incoming calls (IntelliJ)")
         map("<C-A-l>", actions.format_buffer, "Format (IntelliJ)")
+        map("<C-A-o>", require("kotlin-lite.organize").organize, "Organize imports (IntelliJ)")
         map("<C-S-t>", actions.alternate_file, "Go to test (IntelliJ)")
         map("<M-CR>", actions.auto_import_under_cursor, "Auto-import (IntelliJ)")
         map("<C-e>", actions.recent_files, "Recent files (IntelliJ)")
