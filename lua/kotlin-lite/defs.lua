@@ -23,52 +23,66 @@ local NOISE = {
 -- jar origin
 -------------------------------------------------------------------
 
--- { dir, rel, artifact, version } for a file inside an extracted jar, else nil.
--- `labels` memoizes .jarname reads per jar dir.
+-- { dir, rel, artifact, version, id, prio } for a library file (an extracted
+-- jar, the Android SDK, the JDK), else nil. id: the library (jars.info; the
+-- dir when unknown); prio: 1 for stubs. `labels` memoizes
+-- per dir.
 local function jar_info(file, labels)
     if not jars.is_jar(file) then return nil end
-    local dir_name, rel = file:match("^" .. vim.pesc(cfg().cache_dir) .. "/([^/]+)/(.*)$")
-    if not dir_name then return nil end
-    local dir = cfg().cache_dir .. "/" .. dir_name
+    local sdir, sinfo = require("kotlin-lite.sdk").owner(file)
+    local dir = sdir or file:match("^(" .. vim.pesc(cfg().cache_dir) .. "/[^/]+)/")
+    if not dir then return nil end
     local info = labels and labels[dir]
     if not info then
-        local artifact, version = jars._parse_nv(jars.jar_label(dir))
-        info = { artifact = artifact, version = version }
+        local i = jars.info(dir)
+        info = {
+            artifact = i.artifact, version = i.version,
+            id = i.id or dir,
+            prio = sinfo and sinfo.stubs and 1 or 0,
+        }
         if labels then labels[dir] = info end
     end
-    return { dir = dir, rel = rel, artifact = info.artifact, version = info.version }
+    return {
+        dir = dir, rel = file:sub(#dir + 2), artifact = info.artifact, version = info.version,
+        id = info.id, prio = info.prio,
+    }
 end
 M._jar_info = jar_info
 
--- Keep jar matches only from the newest extracted version of each artifact.
--- A source file shipped in several artifacts (KMP common sources) counts once,
--- from the shortest artifact name (ui-graphics over ui-graphics-desktop).
+-- of two dirs shipping one file: sources over stubs, then the shortest
+-- artifact name (ui-graphics over ui-graphics-desktop)
+local function preferred(a, b)
+    if a.prio ~= b.prio then return a.prio < b.prio end
+    if #a.artifact ~= #b.artifact then return #a.artifact < #b.artifact end
+    return a.dir < b.dir
+end
+
+-- Keep library matches only from the newest version of each library (when
+-- several versions' dirs were searched). A file shipped in several dirs (KMP
+-- common sources, SDK sources + stubs) counts once: every match of it from
+-- the preferred dir, none from the others.
 function M.latest_only(items)
     local labels, newest = {}, {}
     for _, it in ipairs(items) do
         local j = jar_info(it.filename, labels)
         if j then
-            local cur = newest[j.artifact]
-            if not cur or jars._ver_lt(cur, j.version) then newest[j.artifact] = j.version end
+            local cur = newest[j.id]
+            if not cur or jars._ver_lt(cur, j.version) then newest[j.id] = j.version end
         end
     end
     local kept = vim.tbl_filter(function(it)
         local j = jar_info(it.filename, labels)
-        return not j or newest[j.artifact] == j.version
+        return not j or newest[j.id] == j.version
     end, items)
 
-    local base = {} -- "rel:lnum" -> item
+    local from = {} -- rel -> the dir it is taken from
     for _, it in ipairs(kept) do
         local j = jar_info(it.filename, labels)
-        if j then
-            local key = j.rel .. ":" .. it.lnum
-            local cur = base[key]
-            if not cur or #j.artifact < #jar_info(cur.filename, labels).artifact then base[key] = it end
-        end
+        if j and (not from[j.rel] or preferred(j, from[j.rel])) then from[j.rel] = j end
     end
     return vim.tbl_filter(function(it)
         local j = jar_info(it.filename, labels)
-        return not j or base[j.rel .. ":" .. it.lnum] == it
+        return not j or from[j.rel].dir == j.dir
     end, kept)
 end
 
@@ -96,9 +110,14 @@ local function module_of(rel)
     return dir == "." and "" or dir
 end
 
--- strip visibility / expect / actual / ... and the trailing "{"
+-- strip annotations, visibility / expect / actual / ... and the trailing "{"
 local function signature(text)
     local rest, mp = text, nil
+    while true do
+        local tail = rest:match("^@[%w_.:]+%b()%s*(.*)$") or rest:match("^@[%w_.:]+%s+(.*)$")
+        if not tail then break end
+        rest = tail
+    end
     while true do
         local w, tail = rest:match("^(%l+)%s+(.*)$")
         if not w or not NOISE[w] then break end

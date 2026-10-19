@@ -65,7 +65,8 @@ end
 M.within = within
 
 --- How directly the header points at a declaration of `word` living in `pkg`:
---- 1 explicit import, 2 same package, 3 star import, 4 default import, NONE otherwise.
+--- 1 explicit import, 2 same package, 3 star import, 4 default import (4.5
+--- java.lang: kotlin.String / kotlin.Exception win), NONE otherwise.
 function M.rank(ctx, word, pkg)
     if not pkg then return M.NONE end
     local q = ctx.explicit[word]
@@ -74,7 +75,7 @@ function M.rank(ctx, word, pkg)
     for _, w in ipairs(ctx.wildcards) do
         if within(pkg, w) then return 3 end
     end
-    if DEFAULT[pkg] then return 4 end
+    if DEFAULT[pkg] then return pkg == "java.lang" and 4.5 or 4 end
     return M.NONE
 end
 

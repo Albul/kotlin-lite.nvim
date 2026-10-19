@@ -149,10 +149,10 @@ function M.at_word(it, word)
     return it
 end
 
--- project root + every extracted jar source tree
+-- project root + the extracted jar source trees of the current file's project
 function M.search_dirs()
     local dirs = { M.root() }
-    vim.list_extend(dirs, jars().jar_dirs())
+    vim.list_extend(dirs, jars().project_dirs(vim.api.nvim_buf_get_name(0)))
     return dirs
 end
 

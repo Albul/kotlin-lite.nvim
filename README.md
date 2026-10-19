@@ -76,6 +76,30 @@ API (`com.android.internal`, `@hide` — whatever the stubs lack). When the
 sources aren't the compileSdk ones, the first jump says so, with the
 `sdkmanager "sources;android-<n>"` that installs them.
 
+JDK: in JVM code (a module without the android plugin; in a KMP module its
+`jvm*` / `desktop*` source sets) the same for `java.*` / `javax.*` —
+`Instant.now()`, `ChronoUnit.DAYS`, `java.sql.Connection`, `Thread` — from the
+`lib/src.zip` of the JDK the build's toolchain asks for (`jvmToolchain(n)`,
+`JavaLanguageVersion.of(n)`, `JvmTarget.JVM_n`, `JavaVersion.VERSION_n`), found
+under `$JAVA_HOME`, `~/.sdkman/candidates/java`, `/usr/lib/jvm`, `java` on
+`PATH`; else `$JAVA_HOME`, else the newest. The `jdk_modules` of it are extracted
+once into the jar cache (`java.*` / `javax.*` only, not `jdk.internal` / `sun`).
+Kotlin's own types come first: `String`, `Exception`, `List` go to the stdlib,
+and the members of Java types Kotlin maps to its own (`java.lang.String`,
+`Object`, `Integer`, `java.util.List`, ...) are no candidates. Another JDK than
+the toolchain's is said once.
+
+Library versions: every project the jar cache served leaves its versions in it
+(three `kotlin-stdlib`s, two `coroutines-core`s). For a file only one version of
+each library is searched — the one its build pins (`libs.versions.toml`, a
+`"g:a:v"` in a build script, the Kotlin plugin's version for `kotlin-*`), else
+the newest — and of the platform variants (`-android`, `-desktop`, `-jvm`,
+`-ios*`, ...) those its platform uses (common code: the common artifact only).
+A library is told by artifact name and the root package of its sources, so
+`androidx.core:core` and another `core` stay apart. A file several searched
+dirs ship (KMP common sources in `x` and `x-jvm`, SDK sources and stubs) counts
+once.
+
 Compiler errors: whatever kotlinc reports while a run / test of `<leader>kr` /
 `<leader>kR` / `<leader>kt` / `<leader>kT` compiles (`e:` / `w:` lines of gradle,
 `path:line:col: error:` of a plain `kotlinc`) becomes `vim.diagnostic` errors and
@@ -156,6 +180,8 @@ require("kotlin-lite").setup({
     snacks_integration = true,              -- optional snacks.nvim explorer (see below)
     auto_extract = true,                    -- extract essential library sources (first kotlin buffer)
     android_sdk = nil,                      -- Android SDK dir (nil: $ANDROID_HOME, ...; false: none)
+    jdk = true,                             -- JDK sources (true: the toolchain's; a JDK home; false: none)
+    jdk_modules = { "java.base", "java.logging", "java.net.http", "java.sql" },
     project_keymaps = true,                 -- expose project-level maps globally in a gradle project
     tagfunc = true,                         -- <C-]> / :tag / :ptag resolve like gd in kotlin buffers
     highlight_references = true,            -- on CursorHold, highlight the symbol's occurrences (by scope)
@@ -306,9 +332,9 @@ are forced by clearing the module's `build/test-results` (no dependency on a
 lua/kotlin-lite/
 ├── init.lua      -- setup()/init(), autocmds, user commands
 ├── config.lua    -- defaults + option merging
-├── jars.lua      -- *-sources.jar discovery, extraction, read-only cache
+├── jars.lua      -- *-sources.jar discovery, extraction, a project's versions, read-only cache
 ├── fetch.lua     -- gd on a library class without sources: gradle cache, else gradle downloads them
-├── sdk.lua       -- Android SDK sources / stubs of the compileSdk for android code
+├── sdk.lua       -- platform sources: Android SDK (compileSdk) / JDK (toolchain)
 ├── search.lua    -- ripgrep (+ parallel / cancellable engine) + Kotlin decl patterns + in-buffer search
 ├── scope.lua     -- file structure: comments / strings masked, {} blocks, where a decl is visible
 ├── resolve.lua   -- gd / grt / K / gK / gri / super / tagfunc: receivers (incl. a.b.c, f().x),
@@ -322,7 +348,7 @@ lua/kotlin-lite/
 ├── calls.lua     -- incoming calls: the function / property a usage is in
 ├── breadcrumbs.lua -- Counter › Companion › zero for the statusline
 ├── textobj.lua   -- af / if / ac / ic from scope blocks
-├── defs.lua      -- gd picker rows: newest jar version only, expect/actual columns
+├── defs.lua      -- gd picker rows: one version, one copy of a file, expect/actual columns
 ├── imports.lua   -- file header (package/imports) -> candidate ranking for gd / K / gK
 ├── organize.lua  -- unused imports (hints) and organize imports
 ├── impl.lua      -- gri: class header parsing, subtypes / overrides / actuals of a resolved symbol

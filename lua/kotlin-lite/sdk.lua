@@ -1,9 +1,14 @@
--- Android SDK sources for android code (a module with the android plugin; in
--- KMP its android* source sets): sources/android-<compileSdk>, else the
--- nearest installed level, searched next to the extracted jars; then the
--- compileSdk platform's android-stubs-src.jar (signatures only) for what
--- those sources lack. The stubs start every member at column 0, so they are
--- extracted reindented by braces.
+-- Platform sources, searched next to the extracted jars.
+--
+-- Android code (a module with the android plugin; in KMP its android* source
+-- sets): sources/android-<compileSdk> of the Android SDK, else the nearest
+-- installed level; then the compileSdk platform's android-stubs-src.jar
+-- (signatures only) for what those sources lack. The stubs start every
+-- member at column 0, so they are extracted reindented by braces.
+--
+-- JVM code (a module without android; in KMP its jvm* / desktop* source
+-- sets): lib/src.zip of the JDK the toolchain asks for, else $JAVA_HOME, else
+-- the newest installed; java.* / javax.* of `jdk_modules`, extracted once.
 
 local M = {}
 
@@ -12,7 +17,8 @@ local function cfg()
 end
 
 local by_path = {} -- file -> its SDK dirs
-local used = {}    -- SDK dir -> { level, want = compileSdk, stubs?, api = the stubs dir }
+-- SDK dir -> { level, want = compileSdk / toolchain, stubs?, api = the stubs dir, jdk? }
+local used = {}
 local noted = {}   -- notes given this session
 local public = {}  -- stubs file -> it exists
 
@@ -116,22 +122,40 @@ function M.compile_sdk(path)
     return best
 end
 
---- code that compiles against android.jar: a module applying the android
---- plugin; in a KMP one only its android* source sets
-function M.is_android(path)
+-- KMP source set -> its platform; nil: shared by several
+local function sset_platform(sset)
+    if sset:match("^android") then return "android" end
+    if sset:match("^jvm") or sset:match("^desktop") then return "jvm" end
+    for _, p in ipairs({ "ios", "macos", "tvos", "watchos", "apple", "native", "linux", "mingw" }) do
+        if sset:sub(1, #p) == p then return "native" end
+    end
+    if sset:match("^js") or sset:match("^wasm") or sset:match("^web") then return "web" end
+    return nil
+end
+
+--- platform the code in `path` compiles for: "android" (a module applying
+--- the android plugin), "jvm" (any other module, a file outside gradle), in
+--- KMP by source set: "android", "jvm", "native", "web", nil (common code)
+function M.platform(path)
     local build = build_file(path)
     local text = build and table.concat(read(build) or {}, "\n") or ""
-    local android = text:find("com%.android") or text:find("plugins%.android")
-        or text:find("android%w*Library") or text:find("android%w*Application")
-        or text:find("androidTarget%s*%(") or text:find("%f[%w]android%s*{")
-    if not android then return false end
     -- kotlin multiplatform (not compose multiplatform): by source set
     local low = text:lower()
     local kmp = low:find("kotlinmultiplatform", 1, true) or low:find('kotlin("multiplatform")', 1, true)
         or low:find("kotlin.multiplatform", 1, true)
-    if not kmp then return true end
-    local sset = path:match("/src/([%w]+)/")
-    return sset ~= nil and sset:match("^android") ~= nil
+    if kmp then
+        local sset = path:match("/src/([%w]+)/")
+        return sset and sset_platform(sset) or nil
+    end
+    local android = text:find("com%.android") or text:find("plugins%.android")
+        or text:find("android%w*Library") or text:find("android%w*Application")
+        or text:find("androidTarget%s*%(") or text:find("%f[%w]android%s*{")
+    return android and "android" or "jvm"
+end
+
+--- code that compiles against android.jar
+function M.is_android(path)
+    return M.platform(path) == "android"
 end
 
 -------------------------------------------------------------------
@@ -213,6 +237,130 @@ local function stubs_dir(platform, level)
 end
 
 -------------------------------------------------------------------
+-- the JDK
+-------------------------------------------------------------------
+
+-- where JDKs are installed: each child a JDK home
+M.JDK_ROOTS = { "~/.sdkman/candidates/java", "/usr/lib/jvm", "/Library/Java/JavaVirtualMachines" }
+
+--- the Java version a build script compiles for, nil when it doesn't say
+function M._parse_toolchain(lines)
+    local text = table.concat(lines, "\n")
+    local n = text:match("jvmToolchain%s*%(%s*(%d+)") or text:match("JavaLanguageVersion%.of%s*%(%s*(%d+)")
+        or text:match("JvmTarget%.JVM_1_(%d+)") or text:match("JvmTarget%.JVM_(%d+)")
+        or text:match("JavaVersion%.VERSION_1_(%d+)") or text:match("JavaVersion%.VERSION_(%d+)")
+        or text:match("jvmTarget%s*=%s*\"1%.(%d+)\"") or text:match("jvmTarget%s*=%s*\"(%d+)\"")
+    return n and tonumber(n) or nil
+end
+
+--- the toolchain of the module of `path`, else of the root project
+function M.toolchain(path)
+    local build = build_file(path)
+    local n = build and M._parse_toolchain(read(build) or {})
+    if n then return n end
+    local settings = find_up(path, { "settings.gradle.kts", "settings.gradle" })
+    local root = settings and vim.fs.dirname(settings)
+    for _, f in ipairs(root and { root .. "/build.gradle.kts", root .. "/build.gradle" } or {}) do
+        n = M._parse_toolchain(read(f) or {})
+        if n then return n end
+    end
+    return nil
+end
+
+-- { home, version = "21.0.3", major = 21 } of a JDK home with sources, else nil
+local function jdk_at(home)
+    if not (home and vim.fn.filereadable(home .. "/lib/src.zip") == 1) then return nil end
+    local version
+    for _, l in ipairs(read(home .. "/release") or {}) do
+        version = version or l:match('^JAVA_VERSION="([^"]+)"')
+    end
+    if not version then return nil end
+    local major = tonumber(version:match("^1%.(%d+)") or version:match("^(%d+)"))
+    return { home = vim.fn.resolve(home), version = version, major = major }
+end
+
+-- the installed JDKs with sources; $JAVA_HOME first
+local function jdks()
+    local out, seen = {}, {}
+    local function add(home)
+        local j = home and jdk_at(vim.fn.expand(home))
+        if j and not seen[j.home] then
+            seen[j.home] = true
+            out[#out + 1] = j
+        end
+    end
+    add(vim.env.JAVA_HOME)
+    for _, root in ipairs(M.JDK_ROOTS) do
+        root = vim.fn.expand(root)
+        if is_dir(root) then
+            for name, t in vim.fs.dir(root) do
+                if t == "directory" or t == "link" then
+                    add(root .. "/" .. name)
+                    add(root .. "/" .. name .. "/Contents/Home")
+                end
+            end
+        end
+    end
+    local java = vim.fn.exepath("java")
+    if java ~= "" then add(vim.fs.dirname(vim.fs.dirname(vim.fn.resolve(java)))) end
+    return out
+end
+
+--- the JDK for code in `path`: the `jdk` option's home; else the one the
+--- toolchain asks for (else the nearest newer, else the nearest older);
+--- else $JAVA_HOME; else the newest. { home, version, major, want? } or nil
+function M.jdk(path)
+    local opt = cfg().jdk
+    if opt == false then return nil end
+    if type(opt) == "string" then return jdk_at(vim.fn.expand(opt)) end
+    local all = jdks()
+    if #all == 0 then return nil end
+    local want = M.toolchain(path)
+    local pick
+    if want then
+        local newer, older
+        for _, j in ipairs(all) do
+            if j.major == want and not pick then pick = j end
+            if j.major > want and (not newer or j.major < newer.major) then newer = j end
+            if j.major < want and (not older or j.major > older.major) then older = j end
+        end
+        pick = pick or newer or older
+    elseif vim.env.JAVA_HOME and all[1].home == vim.fn.resolve(vim.fn.expand(vim.env.JAVA_HOME)) then
+        pick = all[1]
+    else
+        for _, j in ipairs(all) do
+            if not pick or j.major > pick.major then pick = j end
+        end
+    end
+    return vim.tbl_extend("force", pick, { want = want })
+end
+
+-- java.* / javax.* of `jdk_modules` from the JDK's src.zip, in the jar cache -> dir
+local function jdk_dir(j)
+    local dir = cfg().cache_dir .. "/jdk-" .. j.version
+    local mods = cfg().jdk_modules
+    local marker = dir .. "/.sdk"
+    if vim.fn.filereadable(marker) == 1 and (read(marker) or {})[1] == table.concat(mods, ",") then return dir end
+    local tmp = dir .. ".tmp"
+    vim.fn.delete(tmp, "rf")
+    vim.fn.mkdir(tmp, "p")
+    local cmd = { "unzip", "-o", "-q", j.home .. "/lib/src.zip" }
+    for _, m in ipairs(mods) do vim.list_extend(cmd, { m .. "/java/*", m .. "/javax/*" }) end
+    vim.list_extend(cmd, { "-d", tmp })
+    local res = vim.system(cmd):wait()
+    -- 11: some pattern matched nothing (a module without javax.*)
+    if res.code ~= 0 and res.code ~= 11 then
+        vim.fn.delete(tmp, "rf")
+        return nil
+    end
+    vim.fn.delete(dir, "rf")
+    vim.fn.rename(tmp, dir)
+    vim.fn.writefile({ "jdk-" .. j.version }, dir .. "/.jarname")
+    vim.fn.writefile({ table.concat(mods, ",") }, marker)
+    return dir
+end
+
+-------------------------------------------------------------------
 -- the dirs to search
 -------------------------------------------------------------------
 
@@ -239,14 +387,28 @@ local function readonly(dir)
     })
 end
 
---- SDK dirs for code in `path`, best first: the sources, the stubs; {} when
---- the code isn't android or there's no SDK
+-- the JDK's dir for JVM code in `path` -> out
+local function jdk_dirs(path, out)
+    local j = M.jdk(path)
+    local dir = j and jdk_dir(j)
+    if dir then
+        if not used[dir] then readonly(dir) end
+        used[dir] = { level = j.major, want = j.want, jdk = true }
+        out[#out + 1] = dir
+    end
+    return out
+end
+
+--- platform dirs for code in `path`, best first: android code the SDK's
+--- sources and stubs, JVM code the JDK; {} for other code or no SDK / JDK
 function M.dirs(path)
     if not path or path == "" then return {} end
     if by_path[path] then return by_path[path] end
     local out = {}
     by_path[path] = out
-    local root = M.is_android(path) and M.root(path)
+    local platform = M.platform(path)
+    if platform == "jvm" then return jdk_dirs(path, out) end
+    local root = platform == "android" and M.root(path)
     local want = root and M.compile_sdk(path)
     if not want then return out end
 
@@ -262,6 +424,7 @@ function M.dirs(path)
         out[#out + 1] = dir
     end
     if stubs then
+        if not used[stubs] then readonly(stubs) end
         used[stubs] = { level = plevel, want = want, stubs = true }
         out[#out + 1] = stubs
     end
@@ -274,6 +437,7 @@ local function owner(file)
         if file:sub(1, #dir + 1) == dir .. "/" then return dir, info end
     end
 end
+M.owner = owner
 
 function M.owns(file)
     return next(used) ~= nil and owner(file) ~= nil
@@ -292,6 +456,18 @@ local function pkg_part(q)
     return #segs > 0 and table.concat(segs, ".") or nil
 end
 
+-- Java types Kotlin maps to its own (kotlin.String, kotlin.Any, kotlin.collections.List,
+-- ...): their members aren't Kotlin's, the Kotlin types are the declarations
+local MAPPED = {}
+for _, f in ipairs({
+    "java/lang/Object", "java/lang/String", "java/lang/CharSequence", "java/lang/Throwable",
+    "java/lang/Comparable", "java/lang/Enum", "java/lang/Cloneable", "java/lang/Iterable",
+    "java/lang/Number", "java/lang/Boolean", "java/lang/Byte", "java/lang/Short", "java/lang/Integer",
+    "java/lang/Long", "java/lang/Character", "java/lang/Float", "java/lang/Double",
+    "java/lang/annotation/Annotation", "java/util/Collection", "java/util/List", "java/util/Set",
+    "java/util/Map", "java/util/Iterator", "java/util/ListIterator",
+}) do MAPPED[f .. ".java"] = true end
+
 -- the stubs are the public API: a sources file they lack is internal / @hide
 local function is_public(info, rel)
     if not info.api then return true end
@@ -300,9 +476,16 @@ local function is_public(info, rel)
     return public[f]
 end
 
+-- path below the dir, from the package root (the JDK's has a module dir first)
+local function rel_of(file, dir, info)
+    local rel = file:sub(#dir + 2)
+    return info.jdk and rel:gsub("^[^/]+/", "", 1) or rel
+end
+
 --- SDK hits narrowed: a top-level one only from a package the file imports
---- (or names, or java.lang); none outside the public API; a stub only where
---- the sources lack that file
+--- (or names, or java.lang); none outside the public API, none of a type
+--- Kotlin maps to its own. (A stub where the sources have that file goes in
+--- defs.latest_only.)
 function M.filter(hits, hdr, opts)
     if not next(used) then return hits end
     local allowed = { ["java.lang"] = true }
@@ -313,16 +496,11 @@ function M.filter(hits, hdr, opts)
         if opts[k] then allowed[pkg_part(opts[k]) or ""] = true end
     end
 
-    local in_sources = {}
-    for _, it in ipairs(hits) do
-        local dir, info = owner(it.filename)
-        if dir and not info.stubs then in_sources[it.filename:sub(#dir + 2)] = true end
-    end
     return vim.tbl_filter(function(it)
         local dir, info = owner(it.filename)
         if not dir then return true end
-        local rel = it.filename:sub(#dir + 2)
-        if info.stubs and in_sources[rel] then return false end
+        local rel = rel_of(it.filename, dir, info)
+        if MAPPED[rel] then return false end
         if not info.stubs and not is_public(info, rel) then return false end
         if (it.indent or 0) > 0 then return true end
         return allowed[(vim.fs.dirname(rel):gsub("/", "."))] == true
@@ -333,20 +511,27 @@ end
 -- presentation
 -------------------------------------------------------------------
 
---- "[android-35] android/os/Build.java" for an SDK file, else nil
+--- "[android-35] android/os/Build.java", "[jdk-21] java/lang/Thread.java"
+--- for an SDK file, else nil
 function M.label(file)
     local dir, info = owner(file)
     if not dir then return nil end
+    if info.jdk then return ("[jdk-%d] %s"):format(info.level, rel_of(file, dir, info)) end
     return ("[android-%d%s] %s"):format(info.level, info.stubs and " stubs" or "", file:sub(#dir + 2))
 end
 
 --- once per session: the file jumped into isn't the compileSdk sources
 function M.notice(file)
     local dir, info = owner(file)
-    if not dir or (info.level == info.want and not info.stubs) then return end
+    if not dir or not info.want or (info.level == info.want and not info.stubs) then return end
     local key = dir .. ":" .. info.want
     if noted[key] then return end
     noted[key] = true
+    if info.jdk then
+        vim.notify(("kotlin-lite: JDK %d sources (toolchain %d): no JDK %d with lib/src.zip found, `jdk` sets its home")
+            :format(info.level, info.want, info.want), vim.log.levels.INFO)
+        return
+    end
     local what = info.stubs and ("API %d stubs, signatures only"):format(info.level)
         or ("API %d sources"):format(info.level)
     vim.notify(("kotlin-lite: %s (compileSdk %d): `sdkmanager \"sources;android-%d\"` installs the exact sources")

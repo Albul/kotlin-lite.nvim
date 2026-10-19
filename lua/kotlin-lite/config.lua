@@ -54,6 +54,11 @@ M.defaults = {
     -- Android SDK for android code (nil: $ANDROID_HOME, $ANDROID_SDK_ROOT,
     -- local.properties sdk.dir, ~/Android/Sdk; false: none)
     android_sdk = nil,
+    -- JDK sources for JVM code (true: the toolchain's JDK, else $JAVA_HOME,
+    -- else the newest installed; a path: that JDK home; false: none), and
+    -- the modules of its lib/src.zip to search
+    jdk = true,
+    jdk_modules = { "java.base", "java.logging", "java.net.http", "java.sql" },
     essentials = {
         -- always considered
         kotlin = {

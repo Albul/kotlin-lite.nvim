@@ -920,9 +920,9 @@ local function pkg_dir(qualifier)
     return #segs > 0 and table.concat(segs, "/") or nil
 end
 
--- library dirs for code in ctx: extracted jars, the Android SDK
+-- library dirs for code in ctx: the project's extracted jars, the Android SDK / the JDK
 local function lib_dirs(ctx)
-    return vim.list_extend(vim.list_slice(jars.jar_dirs()), sdk.dirs(ctx.path))
+    return vim.list_extend(vim.list_slice(jars.project_dirs(ctx.path)), sdk.dirs(ctx.path))
 end
 
 local function keys(set)

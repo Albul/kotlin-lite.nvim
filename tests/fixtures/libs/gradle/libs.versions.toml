@@ -1,0 +1,9 @@
+[versions]
+libsKotlin = "2.0.0"
+libsCoroutines = "1.9.0"
+
+[libraries]
+libsCoroutinesCore = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "libsCoroutines" }
+
+[plugins]
+libsKotlinJvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "libsKotlin" }
