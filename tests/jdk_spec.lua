@@ -204,3 +204,42 @@ describe("gd into the JDK", function()
         end)
     end)
 end)
+
+describe("auto-import from the JDK", function()
+    local note
+    before_each(function()
+        setup({ "17.0.9" })
+        note = nil
+        h.stub(vim, "notify", function(msg) note = msg end)
+    end)
+    after_each(teardown)
+
+    -- auto-import `word` on the first line with `needle` of `file`, with its
+    -- `import <drop>` line removed -> the import lines after
+    local function run(file, needle, word, drop)
+        h.open(file)
+        if drop then
+            local l = h.line_of("import " .. drop)
+            vim.api.nvim_buf_set_lines(0, l - 1, l, false, {})
+        end
+        local tick = vim.b.changedtick
+        h.cursor_at(needle, word)
+        actions.auto_import_under_cursor()
+        h.wait(function() return note ~= nil or vim.b.changedtick ~= tick end)
+        return vim.tbl_filter(function(l) return l:match("^import ") ~= nil end,
+            vim.api.nvim_buf_get_lines(0, 0, 10, false))
+    end
+
+    it("a class of the JDK: java.time.Instant", function()
+        assert.is_true(vim.tbl_contains(run(SERVER, "fun jdkNow()", "Instant", "java.time.Instant"),
+            "import java.time.Instant"), note)
+    end)
+    it("not the JDK's internals: Unsafe", function()
+        run(SERVER, "fun jdkInternal()", "Unsafe")
+        assert.is_truthy(note and note:find("no importable declaration", 1, true), note)
+    end)
+    it("common code doesn't see the JDK", function()
+        run("jdk/kmp/src/commonMain/kotlin/jdkdemo/Common.kt", "fun jdkCommon()", "Thread")
+        assert.is_truthy(note and note:find("no importable declaration", 1, true), note)
+    end)
+end)

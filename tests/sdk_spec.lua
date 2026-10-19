@@ -303,3 +303,41 @@ describe("gd into the exact SDK sources", function()
         assert.is_nil(cap.msg)
     end)
 end)
+
+describe("auto-import from the Android SDK", function()
+    local note, picked
+    before_each(function()
+        setup()
+        note, picked = nil, nil
+        h.stub(vim, "notify", function(msg) note = msg end)
+        h.stub(vim.ui, "select", function(list) picked = vim.tbl_map(function(c) return c.fq end, list) end)
+    end)
+    after_each(teardown)
+
+    -- auto-import `word` on the first line with `needle` (`extra` lines appended
+    -- to the buffer first) -> the import line added, if any
+    local function run(needle, word, extra)
+        h.open(DEMO)
+        if extra then vim.api.nvim_buf_set_lines(0, -1, -1, false, extra) end
+        local tick = vim.b.changedtick
+        h.cursor_at(needle, word)
+        actions.auto_import_under_cursor()
+        h.wait(function() return note ~= nil or picked ~= nil or vim.b.changedtick ~= tick end)
+        for _, l in ipairs(vim.api.nvim_buf_get_lines(0, 0, 10, false)) do
+            if l == "import android.util.Log" then return l end
+        end
+    end
+
+    it("a class of the SDK: android.util.Log", function()
+        assert.are.equal("import android.util.Log", run("fun logger()", "Log"))
+        assert.is_nil(picked)
+    end)
+    it("java.lang of the SDK needs no import", function()
+        run("fun worker()", "Thread")
+        assert.is_truthy(note and note:find("needs no import", 1, true), note)
+    end)
+    it("not what the stubs lack (internal / @hide): PhoneWindow", function()
+        run("fun hidden()", "PhoneWindow", { "fun hidden() = PhoneWindow()" })
+        assert.is_truthy(note and note:find("no importable declaration", 1, true), note)
+    end)
+end)

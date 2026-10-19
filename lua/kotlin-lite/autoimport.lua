@@ -1,7 +1,7 @@
 -- Auto-import the symbol under the cursor (IntelliJ Alt+Enter).
 --
--- Finds every importable declaration of the word in the project + extracted
--- jar sources -- types (incl. nested), top-level fun / val / const val (incl.
+-- Finds every importable declaration of the word in the project, extracted
+-- jar sources and the Android SDK / JDK (public API only) -- types (incl. nested), top-level fun / val / const val (incl.
 -- extensions), members of named / companion objects, enum entries and Java
 -- static members -- and turns each into its fully qualified import path from
 -- the file's package plus its enclosing declarations (found by indentation).
@@ -338,9 +338,11 @@ function M.search(word, member)
     local args = search.decl_args(word)
     for _, p in ipairs(extra_patterns(word)) do vim.list_extend(args, { "-e", p }) end
 
-    search.rg(args, search.search_dirs(), function(items)
+    local sdk = require("kotlin-lite.sdk")
+    local dirs = vim.list_extend(search.search_dirs(), sdk.dirs(vim.api.nvim_buf_get_name(buf)))
+    search.rg(args, dirs, function(items)
         if not vim.api.nvim_buf_is_valid(buf) then return end
-        local all = M.candidates(items, word)
+        local all = M.candidates(sdk.api_only(items), word)
         if member then
             -- after a dot only extensions need an import; members come with the receiver
             all = vim.tbl_filter(function(c) return c.ext end, all)

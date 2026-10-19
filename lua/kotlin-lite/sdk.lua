@@ -482,6 +482,11 @@ local function rel_of(file, dir, info)
     return info.jdk and rel:gsub("^[^/]+/", "", 1) or rel
 end
 
+-- public API, not a type Kotlin maps to its own
+local function in_api(info, rel)
+    return not MAPPED[rel] and (info.stubs or is_public(info, rel))
+end
+
 --- SDK hits narrowed: a top-level one only from a package the file imports
 --- (or names, or java.lang); none outside the public API, none of a type
 --- Kotlin maps to its own. (A stub where the sources have that file goes in
@@ -500,10 +505,18 @@ function M.filter(hits, hdr, opts)
         local dir, info = owner(it.filename)
         if not dir then return true end
         local rel = rel_of(it.filename, dir, info)
-        if MAPPED[rel] then return false end
-        if not info.stubs and not is_public(info, rel) then return false end
+        if not in_api(info, rel) then return false end
         if (it.indent or 0) > 0 then return true end
         return allowed[(vim.fs.dirname(rel):gsub("/", "."))] == true
+    end, hits)
+end
+
+--- SDK hits narrowed to the public API, of any package (what can be imported)
+function M.api_only(hits)
+    if not next(used) then return hits end
+    return vim.tbl_filter(function(it)
+        local dir, info = owner(it.filename)
+        return not dir or in_api(info, rel_of(it.filename, dir, info))
     end, hits)
 end
 
