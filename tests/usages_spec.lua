@@ -66,14 +66,14 @@ describe("gu by what the name resolves to", function()
 
     local cases = {
         { "member: not a shadowing local, a same-named member elsewhere, a typed receiver of another class",
-            ACC, "var balance = 0", "balance", 1, "a/Account.kt:15 a/Account.kt:4 a/Account.kt:8 b/Bank.kt:7" },
+            ACC, "var balance = 0", "balance", 1, "a/Account.kt:15 a/Account.kt:4 a/Account.kt:8 b/Bank.kt:12 b/Bank.kt:7" },
         { "from a usage in another file", BANK, "a.balance = 1", "balance", 1,
-            "a/Account.kt:15 a/Account.kt:4 a/Account.kt:8 b/Bank.kt:7" },
+            "a/Account.kt:15 a/Account.kt:4 a/Account.kt:8 b/Bank.kt:12 b/Bank.kt:7" },
         { "local: its scope only", ACC, "val balance = 5", "balance", 1, "a/Account.kt:10 a/Account.kt:9" },
         { "private member: its file", ACC, "private val secret", "secret", 1,
             "a/Account.kt:11 a/Account.kt:15 a/Account.kt:5" },
         { "top-level fun: files that see it (import line included)", BANK, "open(name", "open", 1,
-            "a/Account.kt:23 b/Bank.kt:10 b/Bank.kt:4" },
+            "a/Account.kt:23 b/Bank.kt:10 b/Bank.kt:12 b/Bank.kt:4" },
         { "fun param: its body and named arguments at calls", ACC, "fun deposit(amount", "amount", 1,
             "a/Account.kt:7 a/Account.kt:8 b/Bank.kt:10" },
     }
@@ -105,14 +105,40 @@ describe("rename by what the name resolves to", function()
         for f, lines in pairs(saved) do vim.fn.writefile(lines, h.fixtures .. "/" .. f) end
     end)
 
-    local function rename(file, needle, word, new)
+    -- the rename preview's buffer, once open
+    local function preview(now)
+        local b
+        h.wait(function()
+            b = vim.iter(vim.api.nvim_list_bufs()):find(function(x)
+                return vim.api.nvim_buf_is_loaded(x) and vim.bo[x].filetype == "kotlinlite-rename"
+            end)
+            return b ~= nil
+        end, now and 1 or nil)
+        return b
+    end
+    -- press `lhs` in the preview, the cursor on the first line containing `needle`
+    local function press(lhs, needle)
+        if needle then h.cursor_at(needle, needle:match("[%w_]+")) end
+        vim.fn.maparg(lhs, "n", false, true).callback()
+    end
+    local function rows()
+        return vim.api.nvim_buf_get_lines(preview(), 0, -1, false)
+    end
+
+    -- rename `word` -> `new`; `keys`: what to press in the preview (default <CR>)
+    local function rename(file, needle, word, new, keys)
         h.stub(vim.ui, "input", function(_, cb) cb(new) end)
-        h.stub(vim.fn, "confirm", function() return 1 end)
         h.open(file)
         h.cursor_at(needle, word)
         local tick = vim.b.changedtick
         actions.rename()
-        h.wait(function() return vim.b.changedtick ~= tick end)
+        if keys ~= false then
+            if preview() then
+                vim.api.nvim_set_current_buf(preview())
+                for _, k in ipairs(keys or { { "<CR>" } }) do press(k[1], k[2]) end
+            end
+        end
+        h.wait(function() return vim.b.changedtick ~= tick end, keys == false and 1 or nil)
     end
 
     local function lines(file)
@@ -146,5 +172,90 @@ describe("rename by what the name resolves to", function()
         assert.are.equal("    a.funds = 1", b[7])
         assert.are.equal("    l.balance = 2", b[9])
         assert.are.equal('    println("balance")', b[11])
+        assert.are.equal('    open(name = "y").balance = 4', b[12], "a guess: unchecked")
+    end)
+
+    it("the preview: by file, certain ones checked, guesses not", function()
+        rename(ACC, "var balance = 0", "balance", "funds", false)
+        local r = rows()
+        assert.are.equal("Rename balance → funds   4 of 5 selected", r[1])
+        local function row(needle)
+            for _, l in ipairs(r) do
+                if l:find(needle, 1, true) then return l end
+            end
+        end
+        local all = table.concat(r, "\n")
+        assert.is_not_nil(row("[x]      4  var balance = 0"), all)
+        assert.is_not_nil(row("[x]      7  a.balance = 1"), all)
+        assert.is_not_nil(row('[ ]?    12  open(name = "y").balance = 4'), all)
+        -- the new name shown inline at each checked occurrence
+        local ns = require("kotlin-lite.rename_preview").ns
+        local inline = 0
+        for _, m in ipairs(vim.api.nvim_buf_get_extmarks(preview(), ns, 0, -1, { details = true })) do
+            local vt = m[4].virt_text
+            if vt and vt[1][1] == "funds" then
+                inline = inline + 1
+                assert.are.equal("balance", r[m[2] + 1]:sub(m[3] + 1, m[4].end_col))
+            end
+        end
+        assert.are.equal(4, inline)
+        vim.api.nvim_set_current_buf(preview())
+        press("q")
+        assert.is_nil(preview(true))
+        assert.are.same(saved[ACC], vim.fn.readfile(h.fixtures .. "/" .. ACC))
+    end)
+
+    it("a guess checked by hand is renamed too", function()
+        rename(ACC, "var balance = 0", "balance", "funds", { { "<Space>", "open" }, { "<CR>" } })
+        h.wait(function() return vim.fn.readfile(h.fixtures .. "/" .. BANK)[12]:find("funds") ~= nil end)
+        assert.are.equal('    open(name = "y").funds = 4', vim.fn.readfile(h.fixtures .. "/" .. BANK)[12])
+        assert.are.equal("    a.funds = 1", vim.fn.readfile(h.fixtures .. "/" .. BANK)[7])
+    end)
+
+    it("a file unchecked as a whole stays as it is", function()
+        rename(ACC, "var balance = 0", "balance", "funds", { { "<Space>", "Bank" }, { "<CR>" } })
+        h.wait(function() return vim.fn.readfile(h.fixtures .. "/" .. ACC)[4]:find("funds") ~= nil end)
+        assert.are.equal("    var funds = 0", vim.fn.readfile(h.fixtures .. "/" .. ACC)[4])
+        assert.are.same(saved[BANK], vim.fn.readfile(h.fixtures .. "/" .. BANK))
+    end)
+
+    it("an occurrence changed after the preview opened: skipped, said", function()
+        local cap = h.capture_notify()
+        rename(ACC, "var balance = 0", "balance", "funds", false)
+        assert.is_not_nil(preview())
+        local b = vim.fn.bufadd(h.fixtures .. "/" .. BANK)
+        vim.fn.bufload(b)
+        vim.api.nvim_buf_set_lines(b, 6, 7, false, { "    a.other = 1" })
+        vim.api.nvim_buf_call(b, function() vim.cmd("silent update") end)
+        vim.api.nvim_set_current_buf(preview())
+        press("<CR>")
+        h.wait(function() return cap.msg ~= nil end)
+        assert.is_truthy(cap.msg:find("1 skipped (changed since the preview)", 1, true), cap.msg)
+        assert.are.equal("    a.other = 1", vim.fn.readfile(h.fixtures .. "/" .. BANK)[7])
+        assert.are.equal("    var funds = 0", vim.fn.readfile(h.fixtures .. "/" .. ACC)[4])
+    end)
+
+    it("unresolved: every mention previewed, said so", function()
+        rename(BANK, 'println("balance")', "println", "say", false)
+        local r = rows()
+        assert.is_truthy(r[3]:find("every mention of 'println'", 1, true), r[3])
+        vim.api.nvim_set_current_buf(preview())
+        press("q")
+        assert.are.same(saved[BANK], vim.fn.readfile(h.fixtures .. "/" .. BANK))
+    end)
+
+    it("a file with unsaved changes: edited, not written", function()
+        local cap = h.capture_notify()
+        vim.cmd("edit! " .. vim.fn.fnameescape(h.fixtures .. "/" .. BANK))
+        vim.api.nvim_buf_set_lines(0, 0, 0, false, { "// mine" })
+        rename(ACC, "var balance = 0", "balance", "funds")
+        h.wait(function() return vim.fn.readfile(h.fixtures .. "/" .. ACC)[4]:find("funds") ~= nil end)
+        assert.are.same(saved[BANK], vim.fn.readfile(h.fixtures .. "/" .. BANK))
+        local b = vim.api.nvim_buf_get_lines(vim.fn.bufnr(h.fixtures .. "/" .. BANK), 0, -1, false)
+        assert.are.equal("// mine", b[1])
+        assert.are.equal("    a.funds = 1", b[8])
+        assert.is_true(vim.bo[vim.fn.bufnr(h.fixtures .. "/" .. BANK)].modified)
+        assert.is_truthy(cap.msg:find("not written (had unsaved changes): ", 1, true), cap.msg)
+        assert.is_truthy(cap.msg:find("Bank.kt", 1, true), cap.msg)
     end)
 end)

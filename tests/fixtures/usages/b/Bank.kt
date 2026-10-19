@@ -9,4 +9,5 @@ fun bank(a: Account) {
     l.balance = 2
     open(name = "x").deposit(amount = 3)
     println("balance")
+    open(name = "y").balance = 4
 }

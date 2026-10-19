@@ -1,5 +1,6 @@
 -- gu / rename: occurrences that mean the resolved declaration, by scope,
--- file header and receiver (no lookup per occurrence).
+-- file header and receiver (no lookup per occurrence). An occurrence kept
+-- without knowing its receiver's type is marked `guess`.
 
 local search = require("kotlin-lite.search")
 local scope = require("kotlin-lite.scope")
@@ -117,11 +118,12 @@ local function it_usages(ctx, lambda)
     return out
 end
 
--- does the occurrence at (l, c) of `sc` (file `path`) mean `sym`?
+-- does the occurrence at (l, c) of `sc` (file `path`) mean `sym`? -> "sure",
+-- "guess" (kept for want of the receiver's type) or false
 local function means(S, path, sc, l, c)
     local sym, word = S.sym, S.sym.name
     local p = scope.key(l, c)
-    if path == S.decl.filename and l == S.decl.lnum and c == S.decl.col - 1 then return true end
+    if path == S.decl.filename and l == S.decl.lnum and c == S.decl.col - 1 then return "sure" end
     local r = resolve.receiver(sc, l, c)
     local member = #sym.owners > 0
 
@@ -140,29 +142,30 @@ local function means(S, path, sc, l, c)
     if na then
         -- a parameter: of the ctor, for a ctor property
         local callee = sc.mask[na.lnum]:match("^[%w_]+", na.col + 1)
-        return member and callee == sym.owners[1].name
+        return member and callee == sym.owners[1].name and "sure"
     end
 
     if not member then
-        if not r then return true end
-        if sym.ext then return true end
-        return r.kind == "chain" and table.concat(r.segs, ".") == sym.pkg
+        if not r then return "sure" end
+        if sym.ext then return "guess" end
+        return r.kind == "chain" and table.concat(r.segs, ".") == sym.pkg and "sure"
     end
 
+    local function in_family()
+        local family = S.family()
+        return any(enclosing_types(sc, p), function(n) return family[n] end) and "sure"
+    end
     if not r then
-        if own or v then return true end
+        if own or v then return "sure" end
         -- unqualified elsewhere: only through an implicit receiver
-        local family = S.family()
+        if in_family() then return "sure" end
         for _, b in ipairs(scope.enclosing(sc, p)) do
-            if b.kind == "lambda" then return true end
+            if b.kind == "lambda" then return "guess" end
         end
-        return any(enclosing_types(sc, p), function(n) return family[n] end)
+        return false
     end
-    if r.kind == "this" or r.kind == "super" then
-        local family = S.family()
-        return any(enclosing_types(sc, p), function(n) return family[n] end)
-    end
-    if r.kind ~= "chain" then return true end
+    if r.kind == "this" or r.kind == "super" then return in_family() end
+    if r.kind ~= "chain" then return "guess" end
     local t
     if r.ctor or r.segs[#r.segs]:match("^%u") then
         t = r.segs[#r.segs]
@@ -170,11 +173,11 @@ local function means(S, path, sc, l, c)
         local d = scope.visible(scope.decls(sc, r.segs[1]), scope.key(r.lnum, r.col), nil)
         t = d and resolve.declared_type(sc, d, r.segs[1])
     end
-    if not t then return true end
+    if not t then return "guess" end
     for _, o in ipairs(sym.owners) do
-        if o.name == t then return true end
+        if o.name == t then return "sure" end
     end
-    return S.family()[t] == true
+    return S.family()[t] == true and "sure"
 end
 
 --- -> { items, sym, decl, here_only } | { items, generated } | { unresolved = true, err? }
@@ -235,14 +238,18 @@ function M.find(ctx, E)
             for _, c in ipairs(occurrences(sc, word, l)) do
                 local keep
                 if i > SCAN_BUDGET then
-                    keep = true
+                    keep = "guess"
                 elseif not visible then
                     local r = resolve.receiver(sc, l, c)
-                    keep = r and r.kind == "chain" and table.concat(r.segs, ".") == sym.pkg
+                    keep = r and r.kind == "chain" and table.concat(r.segs, ".") == sym.pkg and "sure"
                 else
                     keep = means(S, path, sc, l, c)
                 end
-                if keep then out[#out + 1] = qf_item(path, sc, l, c, word) end
+                if keep then
+                    local it = qf_item(path, sc, l, c, word)
+                    it.guess = keep == "guess" or nil
+                    out[#out + 1] = it
+                end
             end
         end
     end

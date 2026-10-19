@@ -332,50 +332,83 @@ end
 -- rename (<leader>cr): word search & replace, scoped to `dir`
 -------------------------------------------------------------------
 
--- rg -w `word` under `dir`, confirm, then cfdo replace word -> new
+-- every mention of `word` under `dir` (unresolved: comments and strings too),
+-- previewed, then renamed
 local function replace_word(word, new, dir, scope_label)
-    search.rg({ "-w", "-e", word }, { dir }, function(items)
+    search.rg({ "-w", "-e", word }, { dir }, function(hits)
+        local files, items = {}, {}
+        for _, it in ipairs(hits) do files[it.filename] = true end
+        local pat = "%f[%w_]" .. vim.pesc(word) .. "%f[^%w_]"
+        for path in pairs(files) do
+            local b = vim.fn.bufnr(path)
+            local lines = b ~= -1 and vim.api.nvim_buf_is_loaded(b) and vim.api.nvim_buf_get_lines(b, 0, -1, false)
+                or vim.fn.readfile(path)
+            for l, line in ipairs(lines) do
+                local i = 1
+                while true do
+                    local s, e = line:find(pat, i)
+                    if not s then break end
+                    items[#items + 1] = { filename = path, lnum = l, col = s, end_col = e + 1, text = vim.trim(line) }
+                    i = e + 1
+                end
+            end
+        end
         if #items == 0 then
             vim.notify("kotlin-lite: nothing to replace", vim.log.levels.INFO)
             return
         end
-        local files = {}
-        for _, it in ipairs(items) do files[it.filename] = true end
-        local msg = ("Replace %d occurrences of '%s' -> '%s' in %d files (%s)?")
-            :format(#items, word, new, vim.tbl_count(files), scope_label)
-        if vim.fn.confirm(msg, "&Yes\n&No", 2) ~= 1 then return end
-
-        local cur_buf = vim.api.nvim_get_current_buf()
-        local view = vim.fn.winsaveview()
-        vim.fn.setqflist({}, " ", { title = "Rename: " .. word .. " -> " .. new, items = items })
-        vim.cmd(("silent! cfdo %%s/\\V\\<%s\\>/%s/ge | update"):format(word, new))
-        if vim.api.nvim_buf_is_valid(cur_buf) then
-            vim.api.nvim_set_current_buf(cur_buf)
-            vim.fn.winrestview(view)
-        end
-        vim.notify(("kotlin-lite: replaced in %d files"):format(vim.tbl_count(files)), vim.log.levels.INFO)
+        M._preview_rename(items, word, new, ("%s: every mention of '%s', comments and strings too"):format(scope_label, word))
     end)
 end
 
-local function apply_rename(items, new, save)
+-- apply `items` (renaming `word`): an item whose text changed since is
+-- skipped; files are written unless they had unsaved changes before
+-- -> files changed, the paths left unsaved, items skipped
+local function apply_rename(items, new, save, word)
+    local unsaved = save and require("kotlin-lite.rename_preview").unsaved(items) or {}
     local by_file = {}
     for _, it in ipairs(items) do
         by_file[it.filename] = by_file[it.filename] or {}
         table.insert(by_file[it.filename], it)
     end
+    local kept, skipped = {}, 0
     for path, list in pairs(by_file) do
         local b = vim.fn.bufadd(path)
         vim.fn.bufload(b)
         table.sort(list, function(a, c) return a.lnum > c.lnum or (a.lnum == c.lnum and a.col > c.col) end)
         for _, it in ipairs(list) do
-            vim.api.nvim_buf_set_text(b, it.lnum - 1, it.col - 1, it.lnum - 1, it.end_col - 1, { it.insert or new })
+            local line = vim.api.nvim_buf_get_lines(b, it.lnum - 1, it.lnum, false)[1] or ""
+            if it.insert or not word or line:sub(it.col, it.end_col - 1) == word then
+                vim.api.nvim_buf_set_text(b, it.lnum - 1, it.col - 1, it.lnum - 1, it.end_col - 1, { it.insert or new })
+            else
+                skipped = skipped + 1
+            end
         end
-        if save then vim.api.nvim_buf_call(b, function() vim.cmd("silent update") end) end
+        if unsaved[path] then
+            kept[#kept + 1] = vim.fn.fnamemodify(path, ":.")
+        elseif save then
+            vim.api.nvim_buf_call(b, function() vim.cmd("silent update") end)
+        end
     end
-    return vim.tbl_count(by_file)
+    table.sort(kept)
+    return vim.tbl_count(by_file), kept, skipped
 end
 
--- a local in place; anything else confirmed and saved
+-- the rename preview of `items`; <CR> applies what is checked
+function M._preview_rename(items, word, new, note)
+    require("kotlin-lite.rename_preview").open(items, {
+        word = word, new = new, note = note,
+        on_apply = function(selected)
+            local n, kept, skipped = apply_rename(selected, new, true, word)
+            local msg = ("kotlin-lite: renamed in %d files"):format(n)
+            if #kept > 0 then msg = msg .. "; not written (had unsaved changes): " .. table.concat(kept, ", ") end
+            if skipped > 0 then msg = msg .. ("; %d skipped (changed since the preview)"):format(skipped) end
+            vim.notify(msg, (#kept > 0 or skipped > 0) and vim.log.levels.WARN or vim.log.levels.INFO)
+        end,
+    })
+end
+
+-- a local in place; anything else previewed, then saved
 function M.rename()
     local word = vim.fn.expand("<cword>")
     if word == "" then return end
@@ -407,13 +440,7 @@ function M.rename()
                 })
             end
             if u.here_only then return apply_rename(u.items, new, false) end
-            local files = {}
-            for _, it in ipairs(u.items) do files[it.filename] = true end
-            local msg = ("Rename %d occurrences of '%s' -> '%s' in %d files?")
-                :format(#u.items, word, new, vim.tbl_count(files))
-            if vim.fn.confirm(msg, "&Yes\n&No", 2) ~= 1 then return end
-            local n = apply_rename(u.items, new, true)
-            vim.notify(("kotlin-lite: renamed in %d files"):format(n), vim.log.levels.INFO)
+            M._preview_rename(u.items, word, new)
         end, "rename")
     end)
 end

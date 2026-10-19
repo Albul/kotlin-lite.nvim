@@ -19,7 +19,7 @@ or unavailable, and for reading library sources extracted from `*-sources.jar`.
 | `gu` / `grr`          | Find usages of what the cursor resolves to → quickfix panel at the bottom. A local / parameter: its scope only (plus named arguments at calls of its fun); `private`: its file; `internal`: its module. Occurrences are dropped when a local shadows the name, when a file doesn't see a top-level declaration (package / imports), when the receiver's type (constructed, `Type.`, a typed local) is outside the member's class and its subtypes, and in comments / strings. A resource (`R.string.x`): every `R.string.x` in code and `@string/x` in Android xml; `BuildConfig.X`, `libs.x`, `projects.x`: their uses. Unresolved names: every mention outside comments |
 | `]r` / `[r`           | Next / previous occurrence of the symbol under the cursor — the ones highlighted on `CursorHold` (same scope rules), with a count, wrapping around per `'wrapscan'` |
 | `<leader>kh`          | Incoming calls (IntelliJ `Ctrl+Alt+H`) — the usages `gu` finds, each named after the function or property it is in (`Counter.bump`, `Counter.Companion.zero`, `main`), in the quickfix panel; imports and the declaration itself are left out |
-| `<leader>cr`          | Rename what the cursor resolves to, at exactly those usages: a local in the buffer (no prompt), anything else across files with confirmation (files saved); library declarations are refused |
+| `<leader>cr`          | Rename what the cursor resolves to, at exactly those usages: a local in the buffer (no prompt), anything else across files through a preview — every occurrence by file with its line and the new name inline, checked when certain, unchecked (`[?]`) where the receiver's type is unknown; `<Space>` toggles a line / a file / a visual range, `a` all, `p` shows the context, `<CR>` applies the checked ones and saves the files (a file that had unsaved changes gets the edit but is not written; an occurrence changed since the preview is skipped). An unresolved name previews every mention of the word. Library declarations are refused |
 | `<leader>cR`          | Rename file; for a same-named top-level `class`/`interface`/`object`/`fun` it offers a module-scoped symbol rename |
 | `<leader>cs`          | File structure outline (braces in comments / strings don't count) — top-level decls & class members (incl. private/protected/internal, marked with a UML sigil), with kind icons (IntelliJ `Ctrl+F12`) |
 | `<leader>cS`          | Go to symbol — live-search picker over top-level classes/objects/interfaces/enums & functions (IntelliJ `Ctrl+N`) |
@@ -351,6 +351,7 @@ lua/kotlin-lite/
 ├── resources.lua -- R.<type>.x / Res.<type>.x -> res/ and composeResources/
 ├── gradle.lua    -- BuildConfig.X, libs.x, projects.x -> build files, version catalog, modules
 ├── usages.lua    -- gu / rename: the occurrences that mean the resolved declaration
+├── rename_preview.lua -- rename: the checklist of occurrences before applying
 ├── highlight.lua -- occurrences of the symbol under the cursor, highlighted on CursorHold
 ├── calls.lua     -- incoming calls: the function / property a usage is in
 ├── breadcrumbs.lua -- Counter › Companion › zero for the statusline
