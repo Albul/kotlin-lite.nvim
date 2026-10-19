@@ -1,0 +1,3 @@
+[versions]
+android-compileSdk = "37"
+android-minSdk = "26"

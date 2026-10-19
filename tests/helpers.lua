@@ -11,6 +11,8 @@ M.fixtures = tests_dir .. "/fixtures"
 vim.cmd.cd(M.fixtures)
 vim.opt.swapfile = false
 vim.opt.ignorecase = false -- Kotlin identifiers are case-sensitive
+-- the machine's Android SDK stays out: sdk_spec brings its own
+vim.env.ANDROID_HOME, vim.env.ANDROID_SDK_ROOT = nil, nil
 -- keep the reporter output clean; tests that check messages use capture_notify()
 vim.notify = function() end
 

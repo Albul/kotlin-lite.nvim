@@ -36,8 +36,9 @@ function M.scan_cache()
     end
 end
 
+-- library sources: an extracted jar, the Android SDK
 function M.is_jar(file)
-    return file:find(cfg().cache_dir, 1, true) == 1
+    return file:find(cfg().cache_dir, 1, true) == 1 or require("kotlin-lite.sdk").owns(file)
 end
 
 -------------------------------------------------------------------

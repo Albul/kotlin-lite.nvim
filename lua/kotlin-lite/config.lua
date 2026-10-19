@@ -51,6 +51,9 @@ M.defaults = {
     snacks_integration = true,
     -- on startup, quietly extract the newest cached sources for common libs
     auto_extract = true,
+    -- Android SDK for android code (nil: $ANDROID_HOME, $ANDROID_SDK_ROOT,
+    -- local.properties sdk.dir, ~/Android/Sdk; false: none)
+    android_sdk = nil,
     essentials = {
         -- always considered
         kotlin = {

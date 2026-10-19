@@ -18,7 +18,10 @@ end
 -- picker label: "[jar] path" for jar sources, project-relative otherwise
 local function display(it)
     local f = it.filename
-    if jars.is_jar(f) then
+    local sdk_label = require("kotlin-lite.sdk").label(f)
+    if sdk_label then
+        f = sdk_label
+    elseif jars.is_jar(f) then
         f = "[jar] " .. (f:match("^" .. vim.pesc(cfg().cache_dir) .. "/[^/]+/(.*)$") or f)
     else
         f = vim.fn.fnamemodify(f, ":.")
@@ -46,6 +49,7 @@ local function jump(it)
     vim.cmd.edit(vim.fn.fnameescape(it.filename))
     pcall(vim.api.nvim_win_set_cursor, 0, { it.lnum, math.max((it.col or 1) - 1, 0) })
     vim.cmd("normal! zvzz")
+    require("kotlin-lite.sdk").notice(it.filename)
 end
 M._jump, M._tag_origin, M._push_tag = jump, tag_origin, push_tag
 

@@ -10,6 +10,7 @@ local jars = require("kotlin-lite.jars")
 local defs = require("kotlin-lite.defs")
 local autoimport = require("kotlin-lite.autoimport")
 local reader = require("kotlin-lite.reader")
+local sdk = require("kotlin-lite.sdk")
 
 -- R.string.x, BuildConfig.X, ...: classes generated from files that aren't Kotlin
 local GENERATED = { require("kotlin-lite.resources"), require("kotlin-lite.gradle") }
@@ -919,6 +920,11 @@ local function pkg_dir(qualifier)
     return #segs > 0 and table.concat(segs, "/") or nil
 end
 
+-- library dirs for code in ctx: extracted jars, the Android SDK
+local function lib_dirs(ctx)
+    return vim.list_extend(vim.list_slice(jars.jar_dirs()), sdk.dirs(ctx.path))
+end
+
 local function keys(set)
     local out = {}
     for k in pairs(set or {}) do out[#out + 1] = k end
@@ -950,7 +956,8 @@ local function decide(ctx, word, opts, hits, read, headers, final)
     local o = { pkg = opts.pkg, soft_qualifier = opts.soft_qualifier, kind = opts.kind }
     if opts.levels or #implicit > 0 then
         -- receiver types (or implicit ones) before anything top level
-        local keep = by_owner(pool, opts.levels or { implicit }, headers, opts.levels ~= nil)
+        -- members of the receivers, then of their supertypes (inherited)
+        local keep = by_owner(pool, opts.levels or { implicit }, headers, true)
         if keep then
             for _, c in ipairs(keep) do c.item.member_of = c.chain[1] and c.chain[1].name or c.ext end
             o.filtered = true
@@ -1004,14 +1011,16 @@ local function project(ctx, word, opts, E)
         opts = vim.tbl_extend("force", opts, { pkg_dir = false })
     end
     local owners = opts.levels and opts.levels[1] or keys(opts.implicit)
+    local libs = lib_dirs(ctx)
+    local all = vim.list_extend({ search.root() }, libs)
     local function headers(names)
-        return E.await(start(E, header_args(names), search.search_dirs()))
+        return E.await(start(E, header_args(names), all))
     end
-    if #owners > 0 then start(E, header_args(owners), search.search_dirs()) end
+    if #owners > 0 then start(E, header_args(owners), all) end
 
     local args = project_args(ctx, word, opts)
     if opts.glob then args = vim.list_extend({ "-g", "**/" .. opts.glob .. "/*" }, args) end
-    local jar_dirs = jars.jar_dirs()
+    local jar_dirs = libs
     local hp = start(E, args, { search.root() })
     local hj = #jar_dirs > 0 and start(E, args, jar_dirs) or nil
     local read = read_of(E)
@@ -1024,7 +1033,7 @@ local function project(ctx, word, opts, E)
             E.cancel(hj)
             return res
         end
-        hits = vim.list_extend(vim.list_slice(hits), E.await(hj))
+        hits = vim.list_extend(vim.list_slice(hits), sdk.filter(E.await(hj), ctx.hdr, opts))
     end
     return decide(ctx, word, opts, hits, read, headers, true)
 end
@@ -1586,7 +1595,7 @@ local function prefetch_callee(ctx, b, E)
     if not cctx or cctx.recv then return end
     local args = project_args(cctx, name, {})
     start(E, args, { search.root() })
-    local jar_dirs = jars.jar_dirs()
+    local jar_dirs = lib_dirs(ctx)
     if #jar_dirs > 0 then start(E, args, jar_dirs) end
 end
 
@@ -1661,10 +1670,7 @@ local function finish_engine(E)
     end
 end
 
---- Resolve `ctx` with rg engine `E` -> { jump, here? } | { pool, word } |
---- { err, level? }; items carry `sym`, pool items `rank`.
---- opts.stay: on a declaration, that one (not its super / expect)
-function M.resolve(ctx, E, opts)
+local function resolve_word(ctx, E, opts)
     opts = opts or {}
     local word = ctx.word
     if not ctx.lnum then return project(ctx, word, {}, E) end
@@ -1751,6 +1757,39 @@ function M.resolve(ctx, E, opts)
             if not res2.err then return res2 end
         end
     end
+    return res
+end
+
+-- `x.action` / `action` of a Java class is its getAction()
+local function java_getter(ctx, E, opts)
+    local w = ctx.word
+    if not (ctx.lnum and ctx.code and not ctx.call and w:match("^%l")) then return nil end
+    -- a call without arguments (ctx inherits from its base)
+    local g = setmetatable({ word = "get" .. w:sub(1, 1):upper() .. w:sub(2), call = true, args = false },
+        { __index = ctx })
+    local res = resolve_word(g, E, opts)
+    local function java(it) return it.filename:sub(-5) == ".java" end
+    if res.jump and java(res.jump) then return res end
+    local pool = vim.tbl_filter(java, res.pool or {})
+    if #pool == 1 then return { jump = pool[1] } end
+    if #pool > 1 then return { pool = pool, word = g.word } end
+    return nil
+end
+
+--- Resolve `ctx` with rg engine `E` -> { jump, here? } | { pool, word } |
+--- { err, level? }; items carry `sym`, pool items `rank`.
+--- opts.stay: on a declaration, that one (not its super / expect)
+function M.resolve(ctx, E, opts)
+    opts = opts or {}
+    local res = resolve_word(ctx, E, opts)
+    -- settled: a member of the receiver's type, or no receiver to doubt
+    if res.jump and (res.jump.member_of or not ctx.recv) then return res end
+    local best = math.huge
+    for _, it in ipairs(res.pool or {}) do best = math.min(best, it.rank or 0) end
+    -- a pool of unrelated members (all demoted) doesn't count
+    if res.pool and not ctx.recv and best < DEMOTE then return res end
+    local got = java_getter(ctx, E, opts)
+    if got and (not (res.jump or res.pool) or (got.jump and got.jump.member_of)) then return got end
     return res
 end
 

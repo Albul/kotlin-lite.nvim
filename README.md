@@ -59,6 +59,23 @@ resolves its `sources` artifact through the project's repositories. Then the jum
 android packages and packages the project declares are skipped; "no sources
 published" is remembered for the session.
 
+Android SDK: in android code (a module with the android plugin; in a KMP
+module its `android*` source sets) `gd` / `K` / `grt` also reach the platform —
+`Build.VERSION.SDK_INT`, `Color.TRANSPARENT`, `Intent.ACTION_VIEW`, members
+inherited from `Activity` / `Context`, Java getters as properties (`intent`,
+`window`, `i.action`, `context.packageName`), `java.lang.*`. The SDK is
+`android_sdk`, else `$ANDROID_HOME` / `$ANDROID_SDK_ROOT` / `sdk.dir` of
+`local.properties` / `~/Android/Sdk`; the level is the module's `compileSdk`
+(a literal, `compileSdk { version = release(n) }` or through
+`libs.versions.toml`). Searched: `sources/android-<compileSdk>`, else the
+nearest installed level, then the `android-stubs-src.jar` of the compileSdk
+platform (exact signatures, no bodies) for what those sources lack — a class
+or member newer than them, `android.R`, `Manifest.permission`. A class of a
+package the file doesn't import isn't offered, nor anything outside the public
+API (`com.android.internal`, `@hide` — whatever the stubs lack). When the
+sources aren't the compileSdk ones, the first jump says so, with the
+`sdkmanager "sources;android-<n>"` that installs them.
+
 Compiler errors: whatever kotlinc reports while a run / test of `<leader>kr` /
 `<leader>kR` / `<leader>kt` / `<leader>kT` compiles (`e:` / `w:` lines of gradle,
 `path:line:col: error:` of a plain `kotlinc`) becomes `vim.diagnostic` errors and
@@ -138,6 +155,7 @@ require("kotlin-lite").setup({
     intellij_keymaps = false,               -- register IntelliJ maps in addition to the vim ones
     snacks_integration = true,              -- optional snacks.nvim explorer (see below)
     auto_extract = true,                    -- extract essential library sources (first kotlin buffer)
+    android_sdk = nil,                      -- Android SDK dir (nil: $ANDROID_HOME, ...; false: none)
     project_keymaps = true,                 -- expose project-level maps globally in a gradle project
     tagfunc = true,                         -- <C-]> / :tag / :ptag resolve like gd in kotlin buffers
     highlight_references = true,            -- on CursorHold, highlight the symbol's occurrences (by scope)
@@ -290,6 +308,7 @@ lua/kotlin-lite/
 ├── config.lua    -- defaults + option merging
 ├── jars.lua      -- *-sources.jar discovery, extraction, read-only cache
 ├── fetch.lua     -- gd on a library class without sources: gradle cache, else gradle downloads them
+├── sdk.lua       -- Android SDK sources / stubs of the compileSdk for android code
 ├── search.lua    -- ripgrep (+ parallel / cancellable engine) + Kotlin decl patterns + in-buffer search
 ├── scope.lua     -- file structure: comments / strings masked, {} blocks, where a decl is visible
 ├── resolve.lua   -- gd / grt / K / gK / gri / super / tagfunc: receivers (incl. a.b.c, f().x),
