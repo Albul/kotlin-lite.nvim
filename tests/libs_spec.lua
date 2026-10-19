@@ -249,9 +249,9 @@ describe("gd with several versions extracted", function()
         local sel = h.capture_select()
         h.open(file)
         h.cursor_at(needle, word)
-        local buf = h.bufname()
+        local buf, pos = h.bufname(), vim.api.nvim_win_get_cursor(0)[1]
         actions.goto_definition()
-        h.wait(function() return h.bufname() ~= buf or sel.list ~= nil end)
+        h.wait(function() return h.bufname() ~= buf or h.cur_line() ~= pos or sel.list ~= nil end)
         assert.is_nil(sel.list and h.format_rows(sel), "picker opened instead of a jump")
     end
 
@@ -282,6 +282,51 @@ describe("gd with several versions extracted", function()
         assert.are.equal(7, h.cur_line())
         gd("libs/server/src/main/kotlin/libsdemo/Server.kt", "fun libsZero()", "ZERO")
         assert.are.equal(7, h.cur_line())
+    end)
+    describe("an extension imported from an object (3.days)", function()
+        local dir
+        before_each(function()
+            dir = lib("org.jetbrains.kotlin", "kotlin-stdlib-2.0.0-sources.jar", {
+                ["commonMain/kotlin/time/Duration.kt"] = {
+                    "package kotlin.time", "",
+                    "public value class Duration(private val rawValue: Long) {",
+                    "    public companion object {",
+                    "        public inline val Int.days: Duration get() = TODO()",
+                    "        public inline val Long.days: Duration get() = TODO()",
+                    "        public inline val Double.days: Duration get() = TODO()",
+                    "    }",
+                    "}",
+                } })
+            -- an unrelated member of the name
+            lib("org.jetbrains.kotlinx", "kotlinx-datetime-0.7.0-sources.jar", {
+                ["commonMain/kotlinx/datetime/YearMonth.kt"] = {
+                    "package kotlinx.datetime", "", "public class YearMonth {", "    public val days: Int = 0", "}",
+                } })
+            jars.scan_cache()
+        end)
+        local SERVER = "libs/server/src/main/kotlin/libsdemo/Server.kt"
+
+        it("on an Int literal: the Int one", function()
+            gd(SERVER, "fun libsDaysInt()", "days")
+            assert.are.equal(dir .. "/commonMain/kotlin/time/Duration.kt", h.bufname())
+            assert.are.equal(5, h.cur_line())
+        end)
+        it("on a Long / Double literal: that one", function()
+            gd(SERVER, "fun libsDaysLong()", "days")
+            assert.are.equal(6, h.cur_line())
+            gd(SERVER, "fun libsDaysDouble()", "days")
+            assert.are.equal(7, h.cur_line())
+        end)
+        it("a typed receiver: the one of its type", function()
+            gd(SERVER, "fun libsDaysOf(", "days")
+            assert.are.equal(dir .. "/commonMain/kotlin/time/Duration.kt", h.bufname())
+            assert.are.equal(5, h.cur_line())
+        end)
+        it("a member of the receiver's type wins", function()
+            gd(SERVER, "fun libsSpan(", "days")
+            assert.are.equal("libs/server/src/main/kotlin/libsdemo/Server.kt", h.relname())
+            assert.is_truthy(vim.api.nvim_get_current_line():find("class Span", 1, true))
+        end)
     end)
     it("a member of a java interface with its brace on a line of its own", function()
         local dir = lib("com.example", "pathy-1.0-sources.jar", {

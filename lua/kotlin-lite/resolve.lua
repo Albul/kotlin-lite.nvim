@@ -1139,6 +1139,22 @@ end
 -------------------------------------------------------------------
 
 -- receiver -> project opts; {} when unknown
+-- type of a literal at the start of `s`: "3" -> Int, "3L" -> Long, "true" -> Boolean
+local function literal_type(s)
+    local c = s:sub(1, 1)
+    if c == '"' then return "String" end
+    if c == "'" then return "Char" end
+    local w = s:match("^[%w_.]+") or ""
+    if w == "true" or w == "false" then return "Boolean" end
+    if not w:match("^%.?%d") then return nil end
+    if w:match("^0[xXbB]") then return w:match("[lL]$") and "Long" or "Int" end
+    if w:match("[uU][lL]?$") then return w:match("[lL]$") and "ULong" or "UInt" end
+    if w:match("[lL]$") then return "Long" end
+    if w:match("[fF]$") then return "Float" end
+    if w:find("[.eE]") then return "Double" end
+    return "Int"
+end
+
 local function receiver_opts(ctx, r)
     if r.kind == "this" or r.kind == "super" then
         for _, b in ipairs(scope.enclosing(ctx.sc, ctx.pos)) do
@@ -1156,6 +1172,9 @@ local function receiver_opts(ctx, r)
 
     local segs = r.segs
     if r.ctor then return { levels = { { segs[1] } } } end
+    -- 3.days, 1.5.days
+    local lit = segs[1]:match("^%d") and literal_type(table.concat(segs, "."))
+    if lit then return { levels = { { lit } } } end
     if #segs == 1 then
         local x = segs[1]
         local d = local_decl(ctx, x, r.lnum, r.col)
@@ -1187,21 +1206,6 @@ end
 
 -- nested resolutions a type lookup may take
 local MAX_DEPTH = 4
-
-local function literal_type(s)
-    local c = s:sub(1, 1)
-    if c == '"' then return "String" end
-    if c == "'" then return "Char" end
-    local w = s:match("^[%w_.]+") or ""
-    if w == "true" or w == "false" then return "Boolean" end
-    if not w:match("^%.?%d") then return nil end
-    if w:match("^0[xXbB]") then return w:match("[lL]$") and "Long" or "Int" end
-    if w:match("[uU][lL]?$") then return w:match("[lL]$") and "ULong" or "UInt" end
-    if w:match("[lL]$") then return "Long" end
-    if w:match("[fF]$") then return "Float" end
-    if w:find("[.eE]") then return "Double" end
-    return "Int"
-end
 
 -- `a.b.Foo<X>?` -> { name = "Foo", qual = "a.b", arg = "X" }; nil for a function type
 local function parse_type(s)
@@ -1670,6 +1674,24 @@ local function finish_engine(E)
     end
 end
 
+-- `3.days` with `import kotlin.time.Duration.Companion.days`: no member of
+-- the receiver's type has the name, the extensions imported by it do (a
+-- top-level one, a member of an object): of those, the ones for the
+-- receiver's type when it's known and some are
+local function imported_ext(ctx, word, ro, E)
+    local q = ctx.hdr.explicit[word]
+    if not q then return nil end
+    local res = project(ctx, word, { qualifier = q, pkg_dir = pkg_dir(q) }, E)
+    local exts = vim.tbl_filter(function(it) return it.sym and it.sym.ext ~= nil end,
+        res.pool or (res.jump and { res.jump }) or {})
+    local t = ro.levels and ro.levels[1][1]
+    local typed = vim.tbl_filter(function(it) return it.sym.ext == t end, exts)
+    if #typed > 0 then exts = typed end
+    if #exts == 0 then return nil end
+    if #exts == 1 then return { jump = exts[1] } end
+    return { pool = exts, word = word }
+end
+
 local function resolve_word(ctx, E, opts)
     opts = opts or {}
     local word = ctx.word
@@ -1708,6 +1730,8 @@ local function resolve_word(ctx, E, opts)
         local res = project(ctx, word, ro, E)
         local aliased = ro.levels and not res.jump and through_alias(ctx, word, ro.levels, E)
         if aliased then return aliased end
+        local imported = not res.jump and imported_ext(ctx, word, ro, E)
+        if imported then return imported end
         if ro.levels or res.sole or (opts.depth or 0) >= MAX_DEPTH
             or not cheap_root(ctx, ctx.recv) then
             return res
