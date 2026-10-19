@@ -142,6 +142,9 @@ local function receiver(sc, lnum, s)
                 depth = depth - 1
                 if depth == 0 then
                     local cs, callee = (rest:sub(1, i - 1):gsub("%s*%b<>%s*$", "")):match("()([%a_][%w_]*)%s*$")
+                    -- (x as a.B).member: B, from the text
+                    local cast = not callee and rest:sub(i + 1, -2):match("%f[%w_]as%??%s+([%w_.]+)%s*%??%s*$")
+                    if cast then return { kind = "chain", segs = { cast:match("([%w_]+)$") }, ctor = true } end
                     if not callee then return { kind = "unknown" } end
                     if callee:match("^%u") then
                         return { kind = "chain", segs = { callee }, ctor = true }
@@ -1309,11 +1312,52 @@ end
 
 local type_of
 
+-- ms a receiver's type may take to look up: past it, the candidates as they are
+M.TYPE_BUDGET_MS = 150
+
+-- types of expressions, kept across gd: path -> { tick, [lnum:col:depth] = type | false }.
+-- tick: the buffer's changedtick (a file not loaded: -1); all of it goes
+-- with a write, a new jar dir / classpath (jars.generation)
+local types, types_epoch = {}, nil
+local writes = 0
+vim.api.nvim_create_autocmd({ "BufWritePost", "FileChangedShellPost" }, {
+    group = vim.api.nvim_create_augroup("kotlin-lite-types", { clear = true }),
+    callback = function() writes = writes + 1 end,
+})
+
+local function types_of(path)
+    local epoch = writes .. ":" .. jars.generation()
+    if epoch ~= types_epoch then types, types_epoch = {}, epoch end
+    local buf = vim.fn.bufnr(path)
+    local tick = buf > 0 and vim.api.nvim_buf_is_loaded(buf) and vim.b[buf].changedtick or -1
+    local t = types[path]
+    if not t or t.tick ~= tick then
+        t = { tick = tick }
+        types[path] = t
+    end
+    return t
+end
+
+function M.forget_types()
+    types = {}
+end
+
 local function value_type(ctx, E, base, lnum, col, depth)
     if depth >= MAX_DEPTH then return nil end
+    local cache = base.path and types_of(base.path)
+    -- deeper, the lookup is cut shorter: a type of its own
+    local key = lnum .. ":" .. col .. ":" .. depth
+    if cache and cache[key] ~= nil then return cache[key] or nil end
+    if E.deadline and vim.uv.hrtime() > E.deadline then
+        E.over = true
+        return nil
+    end
     local vctx = M.context_at(base, lnum, col)
     local it = vctx and decided(M.resolve(vctx, E, { depth = depth + 1 }))
-    return it and it.sym and type_of(ctx, E, it, depth + 1)
+    local t = it and it.sym and type_of(ctx, E, it, depth + 1) or nil
+    -- a lookup cut short says nothing
+    if cache and not E.over then cache[key] = t or false end
+    return t
 end
 
 type_of = function(ctx, E, it, depth)
@@ -1338,6 +1382,10 @@ local function cheap_root(ctx, r)
         local l, c, w
         if r.kind == "chain" then
             l, c, w = r.lnum, r.col, r.segs[1]
+            -- a type, a constructor call, a.b.Type: the type is in the text
+            for _, seg in ipairs(r.segs) do
+                if seg:match("^%u") then return true end
+            end
         elseif r.kind == "call" then
             local cctx = M.context_at(ctx, r.lnum, r.col)
             if not cctx then return false end
@@ -1731,13 +1779,20 @@ local function resolve_word(ctx, E, opts)
         local aliased = ro.levels and not res.jump and through_alias(ctx, word, ro.levels, E)
         if aliased then return aliased end
         local imported = not res.jump and imported_ext(ctx, word, ro, E)
-        if imported then return imported end
+        -- several, the receiver's type unknown: the candidates, unless its type says
+        if imported and (imported.jump or ro.levels) then return imported end
+        if imported then res = imported end
         if ro.levels or res.sole or (opts.depth or 0) >= MAX_DEPTH
             or not cheap_root(ctx, ctx.recv) then
             return res
         end
-        -- several candidates: look the receiver's type up
+        -- several candidates: look the receiver's type up, within the budget
+        local top = not E.deadline
+        if top then E.deadline, E.over = vim.uv.hrtime() + M.TYPE_BUDGET_MS * 1e6, false end
         local t = receiver_type(ctx, ctx.recv, E, opts.depth or 0)
+        local over = E.over
+        if top then E.deadline, E.over = nil, nil end
+        if over then return res end
         if t and t.self then t = { name = t.self.sym.name } end
         if not t or t.name:match("^%u%d?$") then return res end -- (a type parameter)
         local levels = { { t.name } }

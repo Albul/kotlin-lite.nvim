@@ -114,6 +114,7 @@ function M.reset()
     end
     stubs = {}
     require("kotlin-lite.config").setup({})
+    require("kotlin-lite.resolve").forget_types()
     vim.fn.setqflist({}, "r")
     vim.fn.settagstack(0, { items = {} }, "r")
     vim.cmd("silent! pclose | silent! cclose | silent! only")

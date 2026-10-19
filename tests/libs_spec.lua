@@ -328,6 +328,69 @@ describe("gd with several versions extracted", function()
             assert.is_truthy(vim.api.nvim_get_current_line():find("class Span", 1, true))
         end)
     end)
+    describe("the type of a receiver that starts at a type (Doc().toSheet().render())", function()
+        local resolve = require("kotlin-lite.resolve")
+        local SERVER = "libs/server/src/main/kotlin/libsdemo/Server.kt"
+        local dir, budget
+        before_each(function()
+            budget = resolve.TYPE_BUDGET_MS
+            dir = lib("com.example", "io-1.0-sources.jar", {
+                ["com/example/io/Io.kt"] = {
+                    "package com.example.io", "",
+                    "class Doc { fun toSheet(): Sheet = TODO() }",
+                    "class Sheet",
+                    "class Note",
+                    "fun Sheet.render(): String = TODO()",
+                    "fun Note.render(): String = TODO()",
+                } })
+            jars.scan_cache()
+        end)
+        after_each(function() resolve.TYPE_BUDGET_MS = budget end)
+
+        local function at(line)
+            assert.are.equal(dir .. "/com/example/io/Io.kt", h.bufname())
+            assert.are.equal(line, h.cur_line())
+        end
+
+        it("a constructor call", function()
+            gd(SERVER, "fun libsRender()", "render")
+            at(6)
+        end)
+        it("a.b.Type(): fully qualified", function()
+            gd(SERVER, "fun libsRenderFq()", "render")
+            at(6)
+        end)
+        it("(x as T): the type from the cast, as? too", function()
+            gd(SERVER, "fun libsCast(", "render")
+            at(7)
+            gd(SERVER, "fun libsCastQ(", "render")
+            at(7)
+        end)
+        it("over the budget: the candidates as they are", function()
+            resolve.TYPE_BUDGET_MS = 0
+            local sel = h.capture_select()
+            h.open(SERVER)
+            h.cursor_at("fun libsRender()", "render")
+            actions.goto_definition()
+            assert.is_true(h.wait(function() return sel.list ~= nil end))
+            assert.are.equal(2, #sel.list)
+        end)
+        it("the type kept for the next gd, until the buffer changes", function()
+            gd(SERVER, "fun libsRender()", "render")
+            at(6)
+            -- no time to look anything up: what was found is still there
+            resolve.TYPE_BUDGET_MS = 0
+            gd(SERVER, "fun libsRender()", "render")
+            at(6)
+            -- an edit: looked up anew, so (with no time) the candidates
+            h.open(SERVER)
+            vim.api.nvim_buf_set_lines(0, -1, -1, false, { "" })
+            local sel = h.capture_select()
+            h.cursor_at("fun libsRender()", "render")
+            actions.goto_definition()
+            assert.is_true(h.wait(function() return sel.list ~= nil end))
+        end)
+    end)
     it("a member of a java interface with its brace on a line of its own", function()
         local dir = lib("com.example", "pathy-1.0-sources.jar", {
             ["com/example/pathy/Pathy.java"] = {

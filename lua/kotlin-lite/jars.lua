@@ -8,6 +8,7 @@ local jar_dirs = {}
 local scanned = false
 local infos = {}       -- dir -> M.info
 local by_project = {}  -- path -> project_dirs, until the next scan
+local generation = 0   -- bumped whenever what the projects see may change
 local backfilled = false
 
 local function cfg()
@@ -25,9 +26,15 @@ function M.jar_label(dir)
     return vim.fn.fnamemodify(dir, ":t")
 end
 
+--- changes whenever the extracted dirs / a classpath do
+function M.generation()
+    return generation
+end
+
 function M.scan_cache()
     local cache_dir = cfg().cache_dir
     jar_dirs, scanned, infos, by_project = {}, true, {}, {}
+    generation = generation + 1
     if vim.fn.isdirectory(cache_dir) == 0 then return end
     local legacy = false
     for name, t in vim.fs.dir(cache_dir) do
@@ -428,6 +435,7 @@ function M.record_classpath(root, list, replace)
         vim.fn.mkdir(vim.fs.dirname(classpath_file(root)), "p")
         vim.fn.writefile(cur, classpath_file(root))
         by_project = {}
+        generation = generation + 1
     end
     return added
 end
