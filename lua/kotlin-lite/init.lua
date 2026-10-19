@@ -99,24 +99,13 @@ function M.init()
         end
     end
 
-    vim.api.nvim_create_user_command("KotlinSources", function()
-        start(gradle_root(0))
-        require("kotlin-lite.jars").pick_sources_jar()
-    end, { desc = "kotlin-lite: extract a *-sources.jar for navigation" })
-
     vim.api.nvim_create_user_command("KotlinSourcesSync", function()
-        local fetch = require("kotlin-lite.fetch")
-        local name = vim.api.nvim_buf_get_name(0)
-        local root = fetch.build_root(name ~= "" and vim.fs.dirname(name) or vim.fn.getcwd())
-        if not root then
-            return vim.notify("kotlin-lite: not in a gradle build", vim.log.levels.WARN)
-        end
-        fetch.sync(root)
+        require("kotlin-lite.fetch").sync_current()
     end, { desc = "kotlin-lite: extract the sources of every library on the build's classpaths" })
 
-    vim.api.nvim_create_user_command("KotlinSourcesClear", function()
-        require("kotlin-lite.jars").clear()
-    end, { desc = "kotlin-lite: clear the extracted jar cache" })
+    vim.api.nvim_create_user_command("KotlinSourcesClear", function(o)
+        require("kotlin-lite.jars").clear(o.bang)
+    end, { bang = true, desc = "kotlin-lite: drop the sources no synced build uses (!: the whole cache)" })
 end
 
 -- snacks.nvim explorer opts (compact middle packages + kotlin-aware actions).

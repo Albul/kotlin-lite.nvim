@@ -32,7 +32,7 @@ local function specs()
         run_project        = { runner.run_project,             "Run project (kotlin-lite)" },
         test_file          = { runner.run_tests_file,          "Test file (kotlin-lite)" },
         test_project       = { runner.run_tests_project,       "Test project (kotlin-lite)" },
-        sources            = { function() require("kotlin-lite.jars").pick_sources_jar() end, "Extract sources jar (kotlin-lite)" },
+        sources            = { function() require("kotlin-lite.fetch").sync_current() end, "Sync library sources (kotlin-lite)" },
         toggle_compact     = { function() require("kotlin-lite.snacks").toggle_compact() end, "Toggle compact packages (kotlin-lite)" },
         find_files         = { actions.find_files,             "Find files (kotlin-lite)" },
     }

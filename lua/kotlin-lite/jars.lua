@@ -220,58 +220,6 @@ local function find_source_jars(cb)
     end)
 end
 
--- basenames already extracted
-local function extracted_set()
-    local done = {}
-    for _, d in ipairs(M.jar_dirs()) do done[M.jar_label(d)] = true end
-    return done
-end
-
--------------------------------------------------------------------
--- picker (:KotlinSources / <leader>ks)
--------------------------------------------------------------------
-
-function M.pick_sources_jar()
-    find_source_jars(function(jars)
-        if jars == nil then
-            vim.notify("kotlin-lite: no jar search roots found", vim.log.levels.WARN)
-            return
-        end
-        if #jars == 0 then
-            vim.notify("kotlin-lite: no *-sources.jar found", vim.log.levels.WARN)
-            return
-        end
-
-        local done = extracted_set()
-        local installed, available = {}, {}
-        for _, e in ipairs(latest_by_artifact(jars)) do
-            e.installed = done[e.base] or false
-            table.insert(e.installed and installed or available, e)
-        end
-        local by_name = function(a, b) return a.base < b.base end
-        table.sort(installed, by_name)
-        table.sort(available, by_name)
-
-        -- installed first, then a divider, then the rest
-        local items = {}
-        vim.list_extend(items, installed)
-        if #installed > 0 and #available > 0 then
-            items[#items + 1] = { divider = true }
-        end
-        vim.list_extend(items, available)
-
-        vim.ui.select(items, {
-            prompt = "Extract sources jar:",
-            format_item = function(e)
-                if e.divider then return string.rep("─", 44) end
-                return (e.installed and "[+] " or "    ") .. e.base
-            end,
-        }, function(choice)
-            if choice and not choice.divider then M.extract_jar(choice.jar) end
-        end)
-    end)
-end
-
 -------------------------------------------------------------------
 -- the project's libraries: one version each, the variants that fit
 -------------------------------------------------------------------
@@ -570,10 +518,40 @@ function M.backfill(cb)
     end)
 end
 
-function M.clear()
-    vim.fn.delete(cfg().cache_dir, "rf")
+--- all: the whole cache (the JDK / SDK extracts and the syncs' records too).
+--- Else the extracted jars on the classpath of no synced build: leftovers of
+--- other builds, older versions; gd fetches one again when it's needed
+function M.clear(all)
+    local cache_dir = cfg().cache_dir
+    if all then
+        vim.fn.delete(cache_dir, "rf")
+        M.scan_cache()
+        return vim.notify("kotlin-lite: jar cache cleared", vim.log.levels.INFO)
+    end
+    local keep, synced = {}, 0
+    local records = cache_dir .. "/.classpath"
+    if vim.fn.isdirectory(records) == 1 then
+        for name in vim.fs.dir(records) do
+            synced = synced + 1
+            for _, j in ipairs(read_lines(records .. "/" .. name)) do keep[extract_dir(j)] = true end
+        end
+    end
+    if synced == 0 then
+        return vim.notify("kotlin-lite: no synced build to keep the sources of (:KotlinSourcesSync);"
+            .. " :KotlinSourcesClear! clears all", vim.log.levels.WARN)
+    end
+    local removed, kept = 0, 0
+    for _, dir in ipairs(M.jar_dirs()) do
+        if keep[dir] then
+            kept = kept + 1
+        else
+            vim.fn.delete(dir, "rf")
+            removed = removed + 1
+        end
+    end
     M.scan_cache()
-    vim.notify("kotlin-lite: jar cache cleared", vim.log.levels.INFO)
+    vim.notify(("kotlin-lite: removed the sources of %d libraries no synced build uses, kept %d of %d build%s")
+        :format(removed, kept, synced, synced == 1 and "" or "s"), vim.log.levels.INFO)
 end
 
 -- mark cache files read-only (cheap: no disk access)

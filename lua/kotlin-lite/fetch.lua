@@ -407,6 +407,14 @@ function M.build_root(dir)
     return vim.fs.root(dir, { "settings.gradle.kts", "settings.gradle" })
 end
 
+--- :KotlinSourcesSync / <leader>ks: the build of the current buffer (else the cwd)
+function M.sync_current()
+    local name = vim.api.nvim_buf_get_name(0)
+    local root = M.build_root(name ~= "" and vim.fs.dirname(name) or vim.fn.getcwd())
+    if not root then return notify("not in a gradle build", vim.log.levels.WARN) end
+    M.sync(root)
+end
+
 --- on the first kotlin buffer of a build: sync quietly when stale
 function M.auto_sync(dir)
     if not require("kotlin-lite.config").options.auto_sync or not dir then return end

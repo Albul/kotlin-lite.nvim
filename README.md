@@ -37,17 +37,16 @@ or unavailable, and for reading library sources extracted from `*-sources.jar`.
 
 Commands:
 
-- `:KotlinSourcesSync` — the sources of every library on the build's compile
+- `:KotlinSourcesSync` (`<leader>ks`) — the sources of every library on the build's compile
   classpaths (all modules, tests too, every variant), like IntelliJ's Gradle
   sync with "Download sources": gradle (the wrapper, a `--init-script` task, no
   project changes) resolves each library's `sources` artifact, downloading what
   isn't cached, and the jars are extracted. From then on the project sees only
   those libraries, of the versions gradle resolved.
-- `:KotlinSources` (`<leader>ks`) — pick a `*-sources.jar` from `~/.gradle` /
-  `~/.m2` to extract by hand. Only the newest version of each artifact is
-  listed, extracted ones first.
-- `:KotlinSourcesClear` — clear the extracted jar cache (and what the syncs
-  recorded).
+- `:KotlinSourcesClear` — drop the extracted sources no synced build has on
+  its classpath (other builds' leftovers, older versions; `gd` gets one again
+  when it's needed). `:KotlinSourcesClear!` clears the whole cache, the JDK /
+  SDK extracts and the syncs' records too.
 
 On the first Kotlin buffer of a gradle build the sync runs quietly in the
 background when the build was never synced or a build script (settings, the
