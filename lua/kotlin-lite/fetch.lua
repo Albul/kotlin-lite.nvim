@@ -12,15 +12,16 @@ local M = {}
 -- packages of the platform: on no gradle classpath
 local PLATFORM = { java = true, javax = true, jdk = true, sun = true, android = true, dalvik = true }
 
--- per class entry, this session: a message (or false) when there is nothing to fetch
+-- per target (class entry, else package), this session: a message (or false) when there is nothing to fetch
 local failed = {}
 
 function M.reset()
     failed = {}
 end
 
---- import qualifier + name -> { pkg, entry = "a/b/Outer.class" }, nil when
---- there's nothing gradle could download
+--- import qualifier + name -> { pkg, dir = "a/b/", entry = "a/b/Outer.class"? },
+--- nil when there's nothing gradle could download. No entry for a top-level
+--- fun / val / CONSTANT: it is in some FileKt.class, the package has to do
 function M.target(qualifier, word)
     if not qualifier then return nil end
     local segs, cls = {}, nil
@@ -32,7 +33,12 @@ function M.target(qualifier, word)
         segs[#segs + 1] = seg
     end
     if #segs == 0 or PLATFORM[segs[1]] then return nil end
-    return { pkg = table.concat(segs, "."), entry = table.concat(segs, "/") .. "/" .. (cls or word) .. ".class" }
+    local t = { pkg = table.concat(segs, "."), dir = table.concat(segs, "/") .. "/" }
+    local name = cls or word
+    if name:match("^%u") and not (#name > 1 and name:match("^[%u%d_]+$")) then
+        t.entry = t.dir .. name .. ".class"
+    end
+    return t
 end
 
 --- gradle output -> { sources = { path }, nosources = "g:a:v"?, noclass = true? }
@@ -111,19 +117,44 @@ end
 -- gradle
 -------------------------------------------------------------------
 
--- every project: its compile classpaths -> the jar with the class -> its sources
+-- the module's compile classpaths -> the jar / aar with the class (else every
+-- one with a class in the package) -> its sources
 local INIT_SCRIPT = [[
-// kotlin-lite: the -sources.jar of the classpath jar holding -Pkl.class
+// kotlin-lite: the -sources.jar of the classpath jar / aar holding -Pkl.class,
+// else of each one with a class right in -Pkl.pkg
 import java.util.zip.ZipFile
+import java.util.zip.ZipInputStream
 import org.gradle.api.artifacts.component.ModuleComponentIdentifier
+
+// entry names of a jar, of the classes.jar in an aar
+def klEntries = { File f ->
+    def names = []
+    def z = new ZipFile(f)
+    try {
+        if (f.name.endsWith(".aar")) {
+            def inner = z.getEntry("classes.jar")
+            if (inner != null) {
+                def zin = new ZipInputStream(z.getInputStream(inner))
+                for (def e = zin.nextEntry; e != null; e = zin.nextEntry) names << e.name
+            }
+        } else {
+            z.entries().each { names << it.name }
+        }
+    } finally {
+        z.close()
+    }
+    names
+}
 
 allprojects {
     def p = project
     tasks.register("klSources") {
-        def entry = p.findProperty("kl.class")
+        def cls = p.findProperty("kl.class")
+        def pkg = p.findProperty("kl.pkg")
         doLast {
             def seen = [] as Set
             def hit = null
+            def inPkg = [:]
             for (c in p.configurations.toList()) {
                 if (hit != null) break
                 if (!c.canBeResolved || !c.name.toLowerCase().endsWith("compileclasspath")) continue
@@ -135,26 +166,34 @@ allprojects {
                 }
                 for (a in arts) {
                     def id = a.id.componentIdentifier
-                    if (!(id instanceof ModuleComponentIdentifier) || !a.file.name.endsWith(".jar")) continue
-                    if (!seen.add(a.file)) continue
-                    def z = new ZipFile(a.file)
+                    def f = a.file
+                    if (!(id instanceof ModuleComponentIdentifier)) continue
+                    if (!(f.name.endsWith(".jar") || f.name.endsWith(".aar")) || !seen.add(f)) continue
+                    def names
                     try {
-                        if (z.getEntry(entry) != null) { hit = id; break }
-                    } finally {
-                        z.close()
+                        names = klEntries(f)
+                    } catch (ignored) {
+                        continue
                     }
+                    if (cls != null && names.contains(cls)) { hit = id; break }
+                    if (pkg != null && names.any {
+                        it.startsWith(pkg) && it.endsWith(".class") && it.indexOf("/", pkg.length()) < 0
+                    }) inPkg["${id.group}:${id.module}:${id.version}"] = id
                 }
             }
-            if (hit == null) {
+            def ids = hit != null ? [hit] : inPkg.values().toList()
+            if (ids.isEmpty()) {
                 println "KL-NOCLASS"
                 return
             }
-            def gav = "${hit.group}:${hit.module}:${hit.version}"
-            def dep = p.dependencies.create("${gav}:sources@jar")
-            def files = p.configurations.detachedConfiguration(dep)
-                .incoming.artifactView { lenient = true }.files.files
-            if (files.isEmpty()) println "KL-NOSOURCES ${gav}"
-            else files.each { println "KL-SOURCES ${it}" }
+            for (id in ids) {
+                def gav = "${id.group}:${id.module}:${id.version}"
+                def dep = p.dependencies.create("${gav}:sources@jar")
+                def files = p.configurations.detachedConfiguration(dep)
+                    .incoming.artifactView { lenient = true }.files.files
+                if (files.isEmpty()) println "KL-NOSOURCES ${gav}"
+                else files.each { println "KL-SOURCES ${it}" }
+            }
         }
     }
 }
@@ -166,13 +205,16 @@ local function init_script()
     return path
 end
 
---- argv asking gradle in `root` for the sources of the jar holding `entry`
-function M.command(root, entry)
+--- argv asking gradle in `root` for the sources of target `t`, from the
+--- classpaths of `module` (":app"; nil: the root project)
+function M.command(root, t, module)
     local bin = vim.fn.executable(root .. "/gradlew") == 1 and root .. "/gradlew" or "gradle"
-    return {
+    local cmd = {
         bin, "-q", "--no-configuration-cache", "--init-script", init_script(),
-        "klSources", "-Pkl.class=" .. entry,
+        (module or "") .. ":klSources", "-Pkl.pkg=" .. t.dir,
     }
+    if t.entry then cmd[#cmd + 1] = "-Pkl.class=" .. t.entry end
+    return cmd
 end
 
 --- cb(stdout lines, exit code, stderr) on the main loop (stubbed in tests)
@@ -210,7 +252,8 @@ end
 --- Make the sources of target `t` (see M.target) searchable for `file`.
 --- cb(ok, msg?): ok = new sources extracted; msg = why there are none
 function M.sources_for(t, file, cb)
-    if failed[t.entry] ~= nil then return cb(false, failed[t.entry] or nil) end
+    local key = t.entry or t.dir
+    if failed[key] ~= nil then return cb(false, failed[key] or nil) end
     if in_project(t.pkg) then return cb(false) end
     local cached = vim.tbl_filter(function(p) return not jars.is_extracted(p) end, M.cached(t.pkg, roots()))
     if #cached > 0 then return extract(cached, cb) end
@@ -218,14 +261,15 @@ function M.sources_for(t, file, cb)
     local root = gradle_root(file)
     if not root then return cb(false) end
     vim.notify("kotlin-lite: downloading sources for " .. t.pkg .. " ...", vim.log.levels.INFO)
-    M.run(M.command(root, t.entry), root, function(lines, code, stderr)
+    local module = require("kotlin-lite.runner").module_of(root, file)
+    M.run(M.command(root, t, module), root, function(lines, code, stderr)
         local r = M.parse(lines)
         if #r.sources > 0 then
             return extract(r.sources, function(ok) cb(ok) end)
         end
         if r.nosources or r.noclass then
-            failed[t.entry] = r.nosources and ("no sources published for " .. r.nosources) or false
-            return cb(false, failed[t.entry] or nil)
+            failed[key] = r.nosources and ("no sources published for " .. r.nosources) or false
+            return cb(false, failed[key] or nil)
         end
         -- gradle itself failed (offline, broken build): worth another try later
         local why = vim.trim(stderr):match("[^\n]*$")

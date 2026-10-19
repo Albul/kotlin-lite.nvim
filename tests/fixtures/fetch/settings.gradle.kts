@@ -1,1 +1,2 @@
 rootProject.name = "fetch"
+include(":app")

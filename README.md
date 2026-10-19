@@ -52,9 +52,10 @@ with `auto_extract = false`.
 Sources on demand: `gd` on an imported class of a library whose sources aren't
 extracted (`no declaration of 'X' in a.b.c`) gets them, like IntelliJ's
 "Download Sources" — a cached `*-sources.jar` of the package's group is
-extracted at once; otherwise gradle (the wrapper, a `--init-script` task, no
-project changes) finds the classpath jar holding the class and resolves its
-`sources` artifact through the project's repositories. Then the jump. JDK /
+extracted at once; otherwise gradle (the wrapper, a `--init-script` task of the
+file's module, no project changes) finds the classpath jar / aar holding the
+class — for a top-level fun / val, the ones with classes in its package — and
+resolves its `sources` artifact through the project's repositories. Then the jump. JDK /
 android packages and packages the project declares are skipped; "no sources
 published" is remembered for the session.
 

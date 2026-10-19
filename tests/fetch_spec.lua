@@ -22,7 +22,10 @@ local function make_jar(path, files)
     return path
 end
 
-local WIDGET = { [SRC] = { "package com.example.remote.core", "", "open class RemoteWidget" } }
+local WIDGET = { [SRC] = {
+    "package com.example.remote.core", "", "open class RemoteWidget", "",
+    "fun remoteHelper() = Unit", "", "const val MAX_WIDGETS = 3",
+} }
 
 -- gradle-cache path of a sources jar
 local function cached_path(root, group, artifact, version)
@@ -31,12 +34,27 @@ end
 
 describe("fetch.target", function()
     it("package + class -> the .class entry to look for", function()
-        assert.are.same({ pkg = "com.example.remote.core", entry = "com/example/remote/core/RemoteWidget.class" },
-            fetch.target("com.example.remote.core", "RemoteWidget"))
+        assert.are.same({
+            pkg = "com.example.remote.core", dir = "com/example/remote/core/",
+            entry = "com/example/remote/core/RemoteWidget.class",
+        }, fetch.target("com.example.remote.core", "RemoteWidget"))
     end)
     it("a nested class -> its outermost class", function()
-        assert.are.same({ pkg = "com.example.remote.core", entry = "com/example/remote/core/Outer.class" },
-            fetch.target("com.example.remote.core.Outer", "Inner"))
+        assert.are.same({
+            pkg = "com.example.remote.core", dir = "com/example/remote/core/",
+            entry = "com/example/remote/core/Outer.class",
+        }, fetch.target("com.example.remote.core.Outer", "Inner"))
+    end)
+    it("a top-level fun / val (in some FileKt.class) -> the package only", function()
+        assert.are.same({ pkg = "androidx.activity", dir = "androidx/activity/" },
+            fetch.target("androidx.activity", "enableEdgeToEdge"))
+    end)
+    it("a top-level CONSTANT -> the package only", function()
+        assert.are.same({ pkg = "com.example.remote.core", dir = "com/example/remote/core/" },
+            fetch.target("com.example.remote.core", "MAX_WIDGETS"))
+    end)
+    it("a one-letter class is a class", function()
+        assert.are.equal("a/b/X.class", fetch.target("a.b", "X").entry)
     end)
     it("no package -> nil", function()
         assert.is_nil(fetch.target(nil, "RemoteWidget"))
@@ -65,21 +83,36 @@ describe("fetch.parse", function()
 end)
 
 describe("fetch.command", function()
+    local root = h.fixtures .. "/fetch"
+    local class = { pkg = "com.x", dir = "com/x/", entry = "com/x/A.class" }
+
     it("runs the init-script task for the class, quietly, without the configuration cache", function()
-        local cmd = fetch.command(h.fixtures .. "/fetch", "com/x/A.class")
-        local s = table.concat(cmd, " ")
+        local s = table.concat(fetch.command(root, class), " ")
         assert.is_truthy(s:find("--init-script ", 1, true))
-        assert.is_truthy(s:find("klSources", 1, true))
+        assert.is_truthy(s:find(" :klSources ", 1, true))
         assert.is_truthy(s:find("-Pkl.class=com/x/A.class", 1, true))
+        assert.is_truthy(s:find("-Pkl.pkg=com/x/", 1, true))
         assert.is_truthy(s:find("--no-configuration-cache", 1, true))
         assert.is_truthy(s:find("-q", 1, true))
     end)
-    it("the init script registers klSources and resolves the sources classifier", function()
-        local cmd = fetch.command(h.fixtures .. "/fetch", "com/x/A.class")
-        local i = assert(vim.tbl_contains(cmd, "--init-script") and vim.fn.index(cmd, "--init-script"))
+    it("only in the module of the file", function()
+        local s = table.concat(fetch.command(root, class, ":feature:login"), " ")
+        assert.is_truthy(s:find(" :feature:login:klSources ", 1, true))
+    end)
+    it("a package only: no class", function()
+        local s = table.concat(fetch.command(root, { pkg = "com.x", dir = "com/x/" }), " ")
+        assert.is_truthy(s:find("-Pkl.pkg=com/x/", 1, true))
+        assert.is_falsy(s:find("kl.class", 1, true))
+    end)
+    it("the init script resolves the sources classifier, looks into an aar's classes.jar", function()
+        local cmd = fetch.command(root, class)
+        local i = vim.fn.index(cmd, "--init-script")
+        assert.is_true(i >= 0)
         local script = table.concat(vim.fn.readfile(cmd[i + 2]), "\n")
         assert.is_truthy(script:find("klSources", 1, true))
         assert.is_truthy(script:find(":sources@jar", 1, true))
+        assert.is_truthy(script:find(".aar", 1, true))
+        assert.is_truthy(script:find("classes.jar", 1, true))
     end)
 end)
 
@@ -104,12 +137,13 @@ end)
 describe("gd on a class without extracted sources", function()
     local tmp, gradle, runs, cap
 
-    local function gd(needle, word)
+    local function gd_in(file, needle, word)
         cap = h.capture_notify()
-        h.open(USES)
+        h.open(file)
         h.cursor_at(needle, word)
         actions.goto_definition()
     end
+    local function gd(needle, word) gd_in(USES, needle, word) end
 
     before_each(function()
         tmp = vim.fn.tempname()
@@ -156,6 +190,28 @@ describe("gd on a class without extracted sources", function()
         assert.are.equal(1, #runs)
         assert.are.equal(h.fixtures .. "/fetch", runs[1].cwd)
         assert.is_truthy(table.concat(runs[1].cmd, " "):find("com/example/remote/core/RemoteWidget.class", 1, true))
+    end)
+
+    it("a top-level fun: gradle is asked by package, then the jump", function()
+        local jar = tmp .. "/downloaded/remote-core-jvm-1.0.0-sources.jar"
+        h.stub(fetch, "run", function(cmd, cwd, cb)
+            runs[#runs + 1] = { cmd = cmd, cwd = cwd }
+            make_jar(jar, WIDGET)
+            cb({ "KL-SOURCES " .. jar })
+        end)
+        gd("import com.example.remote.core.remoteHelper", "remoteHelper")
+        assert.is_true(h.wait(function() return h.bufname():find("RemoteWidget.kt", 1, true) ~= nil end))
+        assert.are.equal(5, h.cur_line())
+        local s = table.concat(runs[1].cmd, " ")
+        assert.is_truthy(s:find("-Pkl.pkg=com/example/remote/core/", 1, true))
+        assert.is_falsy(s:find("kl.class", 1, true))
+    end)
+
+    it("in a module: gradle runs the task of that module only", function()
+        gd_in("fetch/app/Screen.kt", "import com.example.remote.core.RemoteWidget", "RemoteWidget")
+        assert.is_true(h.wait(function() return #runs > 0 end))
+        assert.are.equal(h.fixtures .. "/fetch", runs[1].cwd)
+        assert.is_truthy(table.concat(runs[1].cmd, " "):find(" :app:klSources ", 1, true))
     end)
 
     it("no sources published: says so, and doesn't ask gradle again", function()
