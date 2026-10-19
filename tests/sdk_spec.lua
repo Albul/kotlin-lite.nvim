@@ -341,3 +341,22 @@ describe("auto-import from the Android SDK", function()
         assert.is_truthy(note and note:find("no importable declaration", 1, true), note)
     end)
 end)
+
+describe("gri into the Android SDK", function()
+    before_each(function() setup() end)
+    after_each(teardown)
+
+    it("subtypes of an SDK class in the SDK too: Context", function()
+        local sel = h.capture_select()
+        h.open(DEMO)
+        vim.api.nvim_buf_set_lines(0, -1, -1, false, { "fun ctx(c: android.content.Context) = c" })
+        h.cursor_at("fun ctx(", "Context")
+        actions.goto_implementation()
+        local cap = h.capture_notify()
+        assert.is_true(h.wait(function() return sel.list ~= nil end, 5000), vim.inspect({ cap.msg, h.bufname(), h.cur_line() }))
+        local files = {}
+        for _, row in ipairs(sel.list) do files[#files + 1] = vim.fs.basename(row.data.filename) end
+        table.sort(files)
+        assert.are.same({ "Activity.java", "ContextWrapper.java", "SdkDemo.kt" }, files)
+    end)
+end)

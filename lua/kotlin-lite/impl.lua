@@ -19,6 +19,7 @@ local MODIFIERS = {
     abstract = true, open = true, final = true, sealed = true, data = true,
     enum = true, annotation = true, inner = true, value = true, inline = true,
     expect = true, actual = true, external = true, companion = true, fun = true,
+    static = true, strictfp = true, -- java
 }
 
 -------------------------------------------------------------------
@@ -132,7 +133,13 @@ function M.parse_header(text)
     i = text:find("%S", i) or #text + 1
 
     local supers = {}
-    if text:sub(i, i) == ":" then supers = split_supers(text:sub(i + 1)) end
+    if text:sub(i, i) == ":" then
+        supers = split_supers(text:sub(i + 1))
+    elseif text:match("^extends%f[^%w_]", i) or text:match("^implements%f[^%w_]", i) then
+        -- java: `extends A<B> implements C, D {`
+        local rest = text:sub(i):gsub("%f[%w_]extends%f[^%w_]", ","):gsub("%f[%w_]implements%f[^%w_]", ",")
+        supers = split_supers(rest)
+    end
     return { kind = kind, name = name, mods = mods, supers = supers }
 end
 
@@ -143,7 +150,8 @@ local function paren_depth(s)
 end
 
 -- header text starting at lines[l], joined while the header obviously goes on
--- (open parens, trailing ':' / ',', next line starting with ':' ',' ')' 'where');
+-- (open parens, trailing ':' / ',', next line starting with ':' ',' ')' 'where'
+-- or java's 'extends' / 'implements');
 -- also returns the header's last line
 local function header_text(lines, l)
     local acc, j = lines[l], l
@@ -151,7 +159,8 @@ local function header_text(lines, l)
         if acc:find("{") and paren_depth(acc) <= 0 then break end
         local cur, nxt = vim.trim(lines[j]), vim.trim(lines[j + 1] or "")
         if paren_depth(acc) > 0 or cur:match("[:,]$") or nxt:match("^[:,)]")
-            or nxt:match("^where%f[^%w_]") then
+            or nxt:match("^where%f[^%w_]") or nxt:match("^extends%f[^%w_]")
+            or nxt:match("^implements%f[^%w_]") then
             j = j + 1
             acc = acc .. " " .. lines[j]
         else
@@ -267,11 +276,12 @@ end
 -- can this rg hit be part of a class header? (skips the bulk of type mentions:
 -- params, properties, return types -- before any file is read)
 --   `class X : T`, `...) : T {` (end of a multi-line ctor), `: T,`, and an
---   own-line supertype list `A, T<E>, B {`
+--   own-line supertype list `A, T<E>, B {`, java's `extends T` / `implements T`
 local function header_line(it)
     local t = it.text
     if t:find("%f[%w_]class%f[^%w_]") or t:find("%f[%w_]interface%f[^%w_]")
-        or t:find("%f[%w_]object%f[^%w_]") or t:match("^[):]") or t:find("%)%s*:") then
+        or t:find("%f[%w_]object%f[^%w_]") or t:match("^[):]") or t:find("%)%s*:")
+        or t:match("^extends%f[^%w_]") or t:match("^implements%f[^%w_]") then
         return true
     end
     -- `name: Type` is a parameter / property, not a supertype entry
@@ -326,6 +336,7 @@ local function subtypes(cache, root, dirs, E)
         local found = E.run({
             "-e", [=[[:,]\s*([\w.]+\.)?]=] .. alt .. [=[\b]=],
             "-e", [=[^\s*([\w.]+\.)?]=] .. alt .. [=[\b]=],
+            "-e", [=[\b(extends|implements)\s+([\w.]+\.)?]=] .. alt .. [=[\b]=], -- java
         }, dirs)
 
         local next_level = {}
@@ -514,6 +525,7 @@ function M.goto_implementation()
         decls = vim.tbl_map(function(d) return resolve.unalias(d, E) or d end, decls)
         local name = decls[1].sym.name
         local cache, dirs, results = new_cache(resolve.reader_of(E)), search.search_dirs(), {}
+        vim.list_extend(dirs, require("kotlin-lite.sdk").dirs(ctx.path))
         for _, d in ipairs(decls) do
             vim.list_extend(results, M.find(d, cache, dirs, E))
         end

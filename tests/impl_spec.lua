@@ -17,6 +17,9 @@ describe("impl.parse_header", function()
         { "qualified super", "class A : x.y.B {", "x.y.B" },
         { "where clause", "class A<T> : B<T> where T : C {", "B" },
         { "no supertypes", "data class A(val x: Int)", "" },
+        { "java extends + implements", "public class A<T extends X> extends B<T> implements C, D {", "B,C,D" },
+        { "java implements only", "public static final class A implements Runnable {", "Runnable" },
+        { "java interface extends", "public interface A extends B, C {", "B,C" },
     }
     for _, c in ipairs(cases) do
         it("supertypes: " .. c[1], function()
