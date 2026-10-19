@@ -48,6 +48,15 @@ gradle / maven caches are searched at most once a day (`:KotlinSourcesClear`
 resets that), plain startups do no disk work. Customize via `essentials`, disable
 with `auto_extract = false`.
 
+Sources on demand: `gd` on an imported class of a library whose sources aren't
+extracted (`no declaration of 'X' in a.b.c`) gets them, like IntelliJ's
+"Download Sources" — a cached `*-sources.jar` of the package's group is
+extracted at once; otherwise gradle (the wrapper, a `--init-script` task, no
+project changes) finds the classpath jar holding the class and resolves its
+`sources` artifact through the project's repositories. Then the jump. JDK /
+android packages and packages the project declares are skipped; "no sources
+published" is remembered for the session.
+
 Compiler errors: whatever kotlinc reports while a run / test of `<leader>kr` /
 `<leader>kR` / `<leader>kt` / `<leader>kT` compiles (`e:` / `w:` lines of gradle,
 `path:line:col: error:` of a plain `kotlinc`) becomes `vim.diagnostic` errors and
@@ -268,6 +277,7 @@ lua/kotlin-lite/
 ├── init.lua      -- setup()/init(), autocmds, user commands
 ├── config.lua    -- defaults + option merging
 ├── jars.lua      -- *-sources.jar discovery, extraction, read-only cache
+├── fetch.lua     -- gd on a library class without sources: gradle cache, else gradle downloads them
 ├── search.lua    -- ripgrep (+ parallel / cancellable engine) + Kotlin decl patterns + in-buffer search
 ├── scope.lua     -- file structure: comments / strings masked, {} blocks, where a decl is visible
 ├── resolve.lua   -- gd / grt / K / gK / gri / super / tagfunc: receivers (incl. a.b.c, f().x),

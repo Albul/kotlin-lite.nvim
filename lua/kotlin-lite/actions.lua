@@ -98,7 +98,18 @@ function M.goto_definition()
     local word = vim.fn.expand("<cword>")
     if word == "" then return end
     local origin = tag_origin(word)
-    require("kotlin-lite.resolve").at_cursor(function(res) go_to(res, origin, "Definition") end)
+    local resolve = require("kotlin-lite.resolve")
+    resolve.run(function(ctx, E)
+        local res = resolve.resolve(ctx, E)
+        local fetch = require("kotlin-lite.fetch")
+        local t = res.fetch and fetch.target(res.fetch.qualifier, res.fetch.word)
+        if not t then return go_to(res, origin, "Definition") end
+        -- a library class without extracted sources: get them, then once more
+        fetch.sources_for(t, ctx.path, function(ok, msg)
+            if not ok then return notify_err(msg and { err = msg } or res) end
+            resolve.run(function(_, E2) go_to(resolve.resolve(ctx, E2), origin, "Definition") end, "gd", ctx)
+        end)
+    end)
 end
 
 function M.goto_super()

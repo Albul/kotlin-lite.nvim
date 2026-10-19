@@ -1,0 +1,236 @@
+-- Sources on demand: gd on a class of a library whose sources aren't
+-- extracted finds its -sources.jar in the gradle / maven cache, else asks
+-- gradle for it like IntelliJ's "Download Sources" does: an init script finds
+-- the classpath jar holding the class and resolves `group:artifact:version:
+-- sources`. The jar is extracted, then gd runs again.
+
+local jars = require("kotlin-lite.jars")
+local search = require("kotlin-lite.search")
+
+local M = {}
+
+-- packages of the platform: on no gradle classpath
+local PLATFORM = { java = true, javax = true, jdk = true, sun = true, android = true, dalvik = true }
+
+-- per class entry, this session: a message (or false) when there is nothing to fetch
+local failed = {}
+
+function M.reset()
+    failed = {}
+end
+
+--- import qualifier + name -> { pkg, entry = "a/b/Outer.class" }, nil when
+--- there's nothing gradle could download
+function M.target(qualifier, word)
+    if not qualifier then return nil end
+    local segs, cls = {}, nil
+    for seg in qualifier:gmatch("[^.]+") do
+        if seg:match("^%u") then
+            cls = seg
+            break
+        end
+        segs[#segs + 1] = seg
+    end
+    if #segs == 0 or PLATFORM[segs[1]] then return nil end
+    return { pkg = table.concat(segs, "."), entry = table.concat(segs, "/") .. "/" .. (cls or word) .. ".class" }
+end
+
+--- gradle output -> { sources = { path }, nosources = "g:a:v"?, noclass = true? }
+function M.parse(lines)
+    local out, seen, noclass = { sources = {} }, {}, false
+    for _, l in ipairs(lines) do
+        local path = l:match("^KL%-SOURCES (.+)$")
+        if path and not seen[path] then
+            seen[path] = true
+            out.sources[#out.sources + 1] = path
+        end
+        out.nosources = out.nosources or l:match("^KL%-NOSOURCES (%S+)")
+        if l:match("^KL%-NOCLASS") then noclass = true end
+    end
+    -- every project answers: one that knows the class wins
+    if noclass and #out.sources == 0 and not out.nosources then out.noclass = true end
+    return out
+end
+
+-------------------------------------------------------------------
+-- the gradle cache
+-------------------------------------------------------------------
+
+local function zip_has_pkg(jar, dir)
+    local res = vim.system({ "unzip", "-Z1", jar }, { text = true }):wait()
+    for entry in (res.stdout or ""):gmatch("[^\n]+") do
+        local d, ext = entry:match("^(.*)/[^/]+%.(%a+)$")
+        if (ext == "kt" or ext == "java") and (d == dir or d:sub(-#dir - 1) == "/" .. dir) then
+            return true
+        end
+    end
+    return false
+end
+
+--- -sources.jars under `roots` (gradle files-2.1 / maven layout) of the group
+--- the package is in, holding the package: the newest of each artifact
+function M.cached(pkg, roots)
+    local segs = vim.split(pkg, ".", { plain = true })
+    local found = {}
+    for _, root in ipairs(roots) do
+        -- deepest group that is a prefix of the package (two segments at least)
+        for i = #segs, 2, -1 do
+            local prefix = vim.list_slice(segs, 1, i)
+            local dir
+            for _, d in ipairs({ table.concat(prefix, "."), table.concat(prefix, "/") }) do
+                if vim.fn.isdirectory(root .. "/" .. d) == 1 then dir = root .. "/" .. d break end
+            end
+            if dir then
+                vim.list_extend(found, vim.fn.globpath(dir, "**/*-sources.jar", false, true))
+                break
+            end
+        end
+    end
+    local pkg_path = table.concat(segs, "/")
+    found = vim.tbl_filter(function(j) return zip_has_pkg(j, pkg_path) end, found)
+    return vim.tbl_map(function(e) return e.jar end, jars._latest_by_artifact(found))
+end
+
+local function roots()
+    local out = {}
+    for _, p in ipairs(require("kotlin-lite.config").options.jar_search_roots) do
+        p = vim.fn.expand(p)
+        if vim.fn.isdirectory(p) == 1 then out[#out + 1] = p end
+    end
+    return out
+end
+
+-- the project declares the package itself (a typo, generated code): no download
+local function in_project(pkg)
+    local re = "^package\\s+" .. pkg:gsub("%.", "\\.") .. "\\s*;?\\s*$"
+    local res = vim.system({ "rg", "-q", "-g", "*.kt", "-g", "*.java", re, search.root() }):wait()
+    return res.code == 0
+end
+
+-------------------------------------------------------------------
+-- gradle
+-------------------------------------------------------------------
+
+-- every project: its compile classpaths -> the jar with the class -> its sources
+local INIT_SCRIPT = [[
+// kotlin-lite: the -sources.jar of the classpath jar holding -Pkl.class
+import java.util.zip.ZipFile
+import org.gradle.api.artifacts.component.ModuleComponentIdentifier
+
+allprojects {
+    def p = project
+    tasks.register("klSources") {
+        def entry = p.findProperty("kl.class")
+        doLast {
+            def seen = [] as Set
+            def hit = null
+            for (c in p.configurations.toList()) {
+                if (hit != null) break
+                if (!c.canBeResolved || !c.name.toLowerCase().endsWith("compileclasspath")) continue
+                def arts
+                try {
+                    arts = c.incoming.artifactView { lenient = true }.artifacts.artifacts
+                } catch (ignored) {
+                    continue
+                }
+                for (a in arts) {
+                    def id = a.id.componentIdentifier
+                    if (!(id instanceof ModuleComponentIdentifier) || !a.file.name.endsWith(".jar")) continue
+                    if (!seen.add(a.file)) continue
+                    def z = new ZipFile(a.file)
+                    try {
+                        if (z.getEntry(entry) != null) { hit = id; break }
+                    } finally {
+                        z.close()
+                    }
+                }
+            }
+            if (hit == null) {
+                println "KL-NOCLASS"
+                return
+            }
+            def gav = "${hit.group}:${hit.module}:${hit.version}"
+            def dep = p.dependencies.create("${gav}:sources@jar")
+            def files = p.configurations.detachedConfiguration(dep)
+                .incoming.artifactView { lenient = true }.files.files
+            if (files.isEmpty()) println "KL-NOSOURCES ${gav}"
+            else files.each { println "KL-SOURCES ${it}" }
+        }
+    }
+}
+]]
+
+local function init_script()
+    local path = vim.fn.stdpath("cache") .. "/kotlin-lite-sources-init.gradle"
+    pcall(vim.fn.writefile, vim.split(INIT_SCRIPT, "\n"), path)
+    return path
+end
+
+--- argv asking gradle in `root` for the sources of the jar holding `entry`
+function M.command(root, entry)
+    local bin = vim.fn.executable(root .. "/gradlew") == 1 and root .. "/gradlew" or "gradle"
+    return {
+        bin, "-q", "--no-configuration-cache", "--init-script", init_script(),
+        "klSources", "-Pkl.class=" .. entry,
+    }
+end
+
+--- cb(stdout lines, exit code, stderr) on the main loop (stubbed in tests)
+function M.run(cmd, cwd, cb)
+    local ok, err = pcall(vim.system, cmd, { cwd = cwd, text = true }, function(res)
+        vim.schedule(function()
+            cb(vim.split(res.stdout or "", "\n", { trimempty = true }), res.code, res.stderr or "")
+        end)
+    end)
+    if not ok then cb({}, -1, tostring(err)) end
+end
+
+local function gradle_root(file)
+    return vim.fs.root(file, { "settings.gradle.kts", "settings.gradle", "gradlew" })
+end
+
+-------------------------------------------------------------------
+-- entry point
+-------------------------------------------------------------------
+
+-- extract the jars not extracted yet -> cb(any extracted)
+local function extract(paths, cb)
+    paths = vim.tbl_filter(function(p) return not jars.is_extracted(p) end, paths)
+    local left, any = #paths, false
+    if left == 0 then return cb(false) end
+    for _, p in ipairs(paths) do
+        jars.extract_jar(p, true, function(ok)
+            any = any or ok
+            left = left - 1
+            if left == 0 then cb(any) end
+        end)
+    end
+end
+
+--- Make the sources of target `t` (see M.target) searchable for `file`.
+--- cb(ok, msg?): ok = new sources extracted; msg = why there are none
+function M.sources_for(t, file, cb)
+    if failed[t.entry] ~= nil then return cb(false, failed[t.entry] or nil) end
+    if in_project(t.pkg) then return cb(false) end
+    local cached = vim.tbl_filter(function(p) return not jars.is_extracted(p) end, M.cached(t.pkg, roots()))
+    if #cached > 0 then return extract(cached, cb) end
+
+    local root = gradle_root(file)
+    if not root then return cb(false) end
+    vim.notify("kotlin-lite: downloading sources for " .. t.pkg .. " ...", vim.log.levels.INFO)
+    M.run(M.command(root, t.entry), root, function(lines, code, stderr)
+        local r = M.parse(lines)
+        if #r.sources > 0 then
+            return extract(r.sources, function(ok) cb(ok) end)
+        end
+        if r.nosources or r.noclass then
+            failed[t.entry] = r.nosources and ("no sources published for " .. r.nosources) or false
+            return cb(false, failed[t.entry] or nil)
+        end
+        -- gradle itself failed (offline, broken build): worth another try later
+        local why = vim.trim(stderr):match("[^\n]*$")
+        cb(false, "gradle failed (exit " .. tostring(code) .. ")" .. (why ~= "" and ": " .. why or ""))
+    end)
+end
+
+return M

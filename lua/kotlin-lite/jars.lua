@@ -101,11 +101,21 @@ M._latest_by_artifact = latest_by_artifact
 -- extraction
 -------------------------------------------------------------------
 
-function M.extract_jar(jar_path, quiet)
-    local dir = cfg().cache_dir .. "/" .. vim.fn.sha256(jar_path)
-    if vim.fn.filereadable(dir .. "/.extracted") == 1 then
+local function extract_dir(jar_path)
+    return cfg().cache_dir .. "/" .. vim.fn.sha256(jar_path)
+end
+
+function M.is_extracted(jar_path)
+    return vim.fn.filereadable(extract_dir(jar_path) .. "/.extracted") == 1
+end
+
+-- on_done(ok) once the tree is searchable (ok = false: unzip failed)
+function M.extract_jar(jar_path, quiet, on_done)
+    on_done = on_done or function() end
+    local dir = extract_dir(jar_path)
+    if M.is_extracted(jar_path) then
         if not quiet then vim.notify("kotlin-lite: already extracted", vim.log.levels.INFO) end
-        return
+        return on_done(true)
     end
     vim.fn.mkdir(dir, "p")
     local jar_name = vim.fn.fnamemodify(jar_path, ":t")
@@ -121,11 +131,13 @@ function M.extract_jar(jar_path, quiet)
                 if not quiet then
                     vim.notify("kotlin-lite: " .. jar_name .. " is ready", vim.log.levels.INFO)
                 end
+                on_done(true)
             else
                 vim.fn.delete(dir, "rf")
                 if not quiet then
                     vim.notify("kotlin-lite: unzip failed for " .. jar_name, vim.log.levels.ERROR)
                 end
+                on_done(false)
             end
         end)
     end)

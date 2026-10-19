@@ -938,7 +938,11 @@ local function decide(ctx, word, opts, hits, read, headers, final)
         end)
         local cands = in_qualifier(pool.cands, opts.qualifier)
         if #cands == 0 then
-            return final and { err = ("no declaration of '%s' in %s"):format(word, opts.qualifier) } or nil
+            -- fetch: a library class whose sources may be downloadable (see fetch.lua)
+            return final and {
+                err = ("no declaration of '%s' in %s"):format(word, opts.qualifier),
+                fetch = { qualifier = opts.qualifier, word = word },
+            } or nil
         end
         return finish(ctx, word, cands, { filtered = true, no_shape = opts.import_line, kind = opts.kind }, read)
     end
