@@ -3,6 +3,11 @@
 -- gradle for it like IntelliJ's "Download Sources" does: an init script finds
 -- the classpath jar holding the class and resolves `group:artifact:version:
 -- sources`. The jar is extracted, then gd runs again.
+--
+-- :KotlinSourcesSync does it for the whole build at once: the sources of
+-- every library on the modules' compile classpaths (tests too), which then
+-- are the only libraries the project sees, of the versions gradle resolved.
+-- Run on its own when the build scripts changed since the last sync.
 
 local jars = require("kotlin-lite.jars")
 local search = require("kotlin-lite.search")
@@ -41,16 +46,22 @@ function M.target(qualifier, word)
     return t
 end
 
---- gradle output -> { sources = { path }, nosources = "g:a:v"?, noclass = true? }
+--- gradle output -> { sources = { path }, nosources = "g:a:v"? (the first),
+--- missing = { "g:a:v" }, noclass = true? }
 function M.parse(lines)
-    local out, seen, noclass = { sources = {} }, {}, false
+    local out, seen, noclass = { sources = {}, missing = {} }, {}, false
     for _, l in ipairs(lines) do
         local path = l:match("^KL%-SOURCES (.+)$")
         if path and not seen[path] then
             seen[path] = true
             out.sources[#out.sources + 1] = path
         end
-        out.nosources = out.nosources or l:match("^KL%-NOSOURCES (%S+)")
+        local gav = l:match("^KL%-NOSOURCES (%S+)")
+        if gav and not seen[gav] then
+            seen[gav] = true
+            out.missing[#out.missing + 1] = gav
+        end
+        out.nosources = out.nosources or gav
         if l:match("^KL%-NOCLASS") then noclass = true end
     end
     -- every project answers: one that knows the class wins
@@ -118,10 +129,13 @@ end
 -------------------------------------------------------------------
 
 -- the module's compile classpaths -> the jar / aar with the class (else every
--- one with a class in the package) -> its sources
+-- one with a class in the package) -> its sources. klSourcesAll: the sources
+-- of all of them, in every project
 local INIT_SCRIPT = [[
 // kotlin-lite: the -sources.jar of the classpath jar / aar holding -Pkl.class,
-// else of each one with a class right in -Pkl.pkg
+// else of each one with a class right in -Pkl.pkg (klSources); of every one
+// (klSourcesAll)
+import java.util.Collections
 import java.util.zip.ZipFile
 import java.util.zip.ZipInputStream
 import org.gradle.api.artifacts.component.ModuleComponentIdentifier
@@ -146,8 +160,39 @@ def klEntries = { File f ->
     names
 }
 
+// prints the sources of g:a:v, else that there are none
+def klResolveSources = { p, String gav ->
+    def dep = p.dependencies.create("${gav}:sources@jar")
+    def files = p.configurations.detachedConfiguration(dep)
+        .incoming.artifactView { lenient = true }.files.files
+    if (files.isEmpty()) println "KL-NOSOURCES ${gav}"
+    else files.each { println "KL-SOURCES ${it}" }
+}
+
+// g:a:v asked already, by any project
+def klAsked = Collections.synchronizedSet(new HashSet())
+
 allprojects {
     def p = project
+    tasks.register("klSourcesAll") {
+        doLast {
+            for (c in p.configurations.toList()) {
+                if (!c.canBeResolved || !c.name.toLowerCase().endsWith("compileclasspath")) continue
+                def arts
+                try {
+                    arts = c.incoming.artifactView { lenient = true }.artifacts.artifacts
+                } catch (ignored) {
+                    continue
+                }
+                for (a in arts) {
+                    def id = a.id.componentIdentifier
+                    if (!(id instanceof ModuleComponentIdentifier)) continue
+                    def gav = "${id.group}:${id.module}:${id.version}"
+                    if (klAsked.add(gav)) klResolveSources(p, gav)
+                }
+            }
+        }
+    }
     tasks.register("klSources") {
         def cls = p.findProperty("kl.class")
         def pkg = p.findProperty("kl.pkg")
@@ -186,18 +231,15 @@ allprojects {
                 println "KL-NOCLASS"
                 return
             }
-            for (id in ids) {
-                def gav = "${id.group}:${id.module}:${id.version}"
-                def dep = p.dependencies.create("${gav}:sources@jar")
-                def files = p.configurations.detachedConfiguration(dep)
-                    .incoming.artifactView { lenient = true }.files.files
-                if (files.isEmpty()) println "KL-NOSOURCES ${gav}"
-                else files.each { println "KL-SOURCES ${it}" }
-            }
+            for (id in ids) klResolveSources(p, "${id.group}:${id.module}:${id.version}")
         }
     }
 }
 ]]
+
+local function gradle_bin(root)
+    return vim.fn.executable(root .. "/gradlew") == 1 and root .. "/gradlew" or "gradle"
+end
 
 local function init_script()
     local path = vim.fn.stdpath("cache") .. "/kotlin-lite-sources-init.gradle"
@@ -208,13 +250,18 @@ end
 --- argv asking gradle in `root` for the sources of target `t`, from the
 --- classpaths of `module` (":app"; nil: the root project)
 function M.command(root, t, module)
-    local bin = vim.fn.executable(root .. "/gradlew") == 1 and root .. "/gradlew" or "gradle"
     local cmd = {
-        bin, "-q", "--no-configuration-cache", "--init-script", init_script(),
+        gradle_bin(root), "-q", "--no-configuration-cache", "--init-script", init_script(),
         (module or "") .. ":klSources", "-Pkl.pkg=" .. t.dir,
     }
     if t.entry then cmd[#cmd + 1] = "-Pkl.class=" .. t.entry end
     return cmd
+end
+
+--- argv asking gradle in `root` for the sources of every project's classpaths
+function M.sync_command(root)
+    return { gradle_bin(root), "-q", "--continue", "--no-configuration-cache", "--init-script", init_script(),
+        "klSourcesAll" }
 end
 
 --- cb(stdout lines, exit code, stderr) on the main loop (stubbed in tests)
@@ -231,22 +278,30 @@ local function gradle_root(file)
     return vim.fs.root(file, { "settings.gradle.kts", "settings.gradle", "gradlew" })
 end
 
+-- unzips at a time
+local PARALLEL = 8
+
 -------------------------------------------------------------------
 -- entry point
 -------------------------------------------------------------------
 
--- extract the jars not extracted yet -> cb(any extracted)
+-- extract the jars not extracted yet, PARALLEL at a time -> cb(any extracted)
 local function extract(paths, cb)
     paths = vim.tbl_filter(function(p) return not jars.is_extracted(p) end, paths)
-    local left, any = #paths, false
+    local next_i, left, any = 1, #paths, false
     if left == 0 then return cb(false) end
-    for _, p in ipairs(paths) do
+    local function more()
+        local p = paths[next_i]
+        if not p then return end
+        next_i = next_i + 1
         jars.extract_jar(p, true, function(ok)
             any = any or ok
             left = left - 1
-            if left == 0 then cb(any) end
+            if left == 0 then return cb(any) end
+            more()
         end)
     end
+    for _ = 1, math.min(PARALLEL, left) do more() end
 end
 
 --- Make the sources of target `t` (see M.target) searchable for `file`.
@@ -255,18 +310,23 @@ function M.sources_for(t, file, cb)
     local key = t.entry or t.dir
     if failed[key] ~= nil then return cb(false, failed[key] or nil) end
     if in_project(t.pkg) then return cb(false) end
-    local cached = vim.tbl_filter(function(p) return not jars.is_extracted(p) end, M.cached(t.pkg, roots()))
-    if #cached > 0 then return extract(cached, cb) end
-
     local root = gradle_root(file)
+    -- searchable for the project: extracted, on its classpath (when synced)
+    local function add(paths)
+        local added = root and jars.record_classpath(root, paths) or false
+        extract(paths, function(ok) cb(ok or added) end)
+    end
+    local cached = vim.tbl_filter(function(p)
+        return not jars.is_extracted(p) or (root and not jars.on_classpath(root, p))
+    end, M.cached(t.pkg, roots()))
+    if #cached > 0 then return add(cached) end
+
     if not root then return cb(false) end
     vim.notify("kotlin-lite: downloading sources for " .. t.pkg .. " ...", vim.log.levels.INFO)
     local module = require("kotlin-lite.runner").module_of(root, file)
     M.run(M.command(root, t, module), root, function(lines, code, stderr)
         local r = M.parse(lines)
-        if #r.sources > 0 then
-            return extract(r.sources, function(ok) cb(ok) end)
-        end
+        if #r.sources > 0 then return add(r.sources) end
         if r.nosources or r.noclass then
             failed[key] = r.nosources and ("no sources published for " .. r.nosources) or false
             return cb(false, failed[key] or nil)
@@ -275,6 +335,83 @@ function M.sources_for(t, file, cb)
         local why = vim.trim(stderr):match("[^\n]*$")
         cb(false, "gradle failed (exit " .. tostring(code) .. ")" .. (why ~= "" and ": " .. why or ""))
     end)
+end
+
+-------------------------------------------------------------------
+-- :KotlinSourcesSync
+-------------------------------------------------------------------
+
+local syncing = {}
+
+local function notify(msg, level)
+    vim.notify("kotlin-lite: " .. msg, level or vim.log.levels.INFO)
+end
+
+--- The sources of every library on the compile classpaths of the build at
+--- `root`, extracted; the classpath recorded (see jars.project_dirs). quiet
+--- (the automatic sync): only says what it extracted. -> cb(ok)
+function M.sync(root, quiet, cb)
+    cb = cb or function() end
+    if syncing[root] then return cb(false) end
+    syncing[root] = true
+    if not quiet then notify("syncing library sources ...") end
+    M.run(M.sync_command(root), root, function(lines, code, stderr)
+        syncing[root] = nil
+        local r = M.parse(lines)
+        local why = vim.trim(stderr):match("[^\n]*$")
+        local failed_msg = "gradle failed (exit " .. tostring(code) .. ")" .. (why ~= "" and ": " .. why or "")
+        if code ~= 0 and #r.sources == 0 then
+            if not quiet then notify("sync: " .. failed_msg, vim.log.levels.ERROR) end
+            return cb(false)
+        end
+        -- a project failed (--continue): what the others had, but no classpath
+        if code == 0 then jars.record_classpath(root, r.sources, true) end
+        local new = vim.tbl_filter(function(p) return not jars.is_extracted(p) end, r.sources)
+        extract(new, function()
+            jars.scan_cache()
+            if quiet and #new == 0 and code == 0 then return cb(true) end
+            local msg = ("sources of %d libraries, %d new"):format(#r.sources, #new)
+            if #r.missing > 0 then msg = msg .. (", %d published none"):format(#r.missing) end
+            if code ~= 0 then msg = msg .. "; " .. failed_msg end
+            notify(msg, code ~= 0 and vim.log.levels.WARN or nil)
+            cb(code == 0)
+        end)
+    end)
+end
+
+-- the build scripts of `root`: what a sync depends on
+local function build_files(root)
+    local files = { "settings.gradle.kts", "settings.gradle", "build.gradle.kts", "build.gradle",
+        "gradle/libs.versions.toml" }
+    for _, m in ipairs(require("kotlin-lite.runner").modules(root)) do
+        local d = m:sub(2):gsub(":", "/")
+        files[#files + 1] = d .. "/build.gradle.kts"
+        files[#files + 1] = d .. "/build.gradle"
+    end
+    return vim.tbl_map(function(f) return root .. "/" .. f end, files)
+end
+
+--- never synced, or a build script changed since
+function M.stale(root)
+    local at = jars.synced_at(root)
+    if not at then return true end
+    for _, f in ipairs(build_files(root)) do
+        local st = vim.uv.fs_stat(f)
+        if st and st.mtime.sec > at then return true end
+    end
+    return false
+end
+
+--- the gradle build of `dir` (its settings script's dir), nil outside one
+function M.build_root(dir)
+    return vim.fs.root(dir, { "settings.gradle.kts", "settings.gradle" })
+end
+
+--- on the first kotlin buffer of a build: sync quietly when stale
+function M.auto_sync(dir)
+    if not require("kotlin-lite.config").options.auto_sync or not dir then return end
+    local root = M.build_root(dir)
+    if root and M.stale(root) then M.sync(root, true) end
 end
 
 return M

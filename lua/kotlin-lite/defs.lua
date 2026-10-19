@@ -145,7 +145,8 @@ function M.describe(it, labels)
     return {
         mp = mp,
         sig = sig,
-        sset = source_set(path),
+        -- a jar's top dir is its source set, whatever its name (jvmJUnit5)
+        sset = source_set(path) or (j and path:match("^(%l+%u[%w]*)/") or nil),
         origin = origin,
         file = vim.fs.basename(it.filename),
         lnum = it.lnum,

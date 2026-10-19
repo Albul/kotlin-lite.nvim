@@ -49,8 +49,9 @@ M.defaults = {
     intellij_keymaps = false,
     -- optional snacks.nvim explorer integration (compact middle packages etc.)
     snacks_integration = true,
-    -- on startup, quietly extract the newest cached sources for common libs
-    auto_extract = true,
+    -- on the first kotlin buffer of a gradle build, :KotlinSourcesSync quietly
+    -- in the background when the build scripts changed since the last sync
+    auto_sync = true,
     -- Android SDK for android code (nil: $ANDROID_HOME, $ANDROID_SDK_ROOT,
     -- local.properties sdk.dir, ~/Android/Sdk; false: none)
     android_sdk = nil,
@@ -59,34 +60,6 @@ M.defaults = {
     -- the modules of its lib/src.zip to search
     jdk = true,
     jdk_modules = { "java.base", "java.logging", "java.net.http", "java.sql" },
-    essentials = {
-        -- always considered
-        kotlin = {
-            "kotlin-stdlib", "kotlin-reflect",
-            "kotlinx-coroutines-core", "kotlinx-coroutines-core-jvm",
-            "kotlinx-serialization-core", "kotlinx-serialization-json",
-        },
-        test = {
-            "junit", "kotlin-test", "kotlin-test-junit",
-            "kotlinx-coroutines-test", "turbine",
-            "mockk", "mockito-core", "mockito-kotlin",
-            "truth", "assertj-core", "robolectric",
-        },
-        -- only when an Android project is detected
-        android = {
-            "core", "core-ktx", "appcompat",
-            "activity", "activity-ktx", "activity-compose",
-            "fragment", "fragment-ktx",
-            "lifecycle-runtime-ktx", "lifecycle-viewmodel-ktx",
-            "material",
-        },
-        compose = {
-            "ui", "ui-graphics", "ui-text", "ui-unit", "ui-tooling-preview",
-            "foundation", "foundation-layout",
-            "material3", "material-icons-core",
-            "runtime", "animation", "navigation-compose",
-        },
-    },
     -- `run_file` / `run_project` terminal split
     run = {
         height = 15,
@@ -137,6 +110,8 @@ M.options = vim.deepcopy(M.defaults)
 
 function M.setup(opts)
     M.options = vim.tbl_deep_extend("force", vim.deepcopy(M.defaults), opts or {})
+    -- the option before :KotlinSourcesSync
+    if M.options.auto_extract == false then M.options.auto_sync = false end
     return M.options
 end
 

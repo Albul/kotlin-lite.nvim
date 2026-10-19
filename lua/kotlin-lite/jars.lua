@@ -171,6 +171,8 @@ function M.extract_jar(jar_path, quiet, on_done)
     end
     vim.system({ "unzip", "-o", "-q", jar_path, "-d", dir }, {}, function(res)
         vim.schedule(function()
+            -- the cache cleared meanwhile
+            if res.code == 0 and vim.fn.isdirectory(dir) == 0 then return on_done(false) end
             if res.code == 0 then
                 vim.fn.writefile({ jar_name }, dir .. "/.jarname")
                 vim.fn.writefile({ jar_path }, dir .. "/.jarpath")
@@ -271,88 +273,6 @@ function M.pick_sources_jar()
 end
 
 -------------------------------------------------------------------
--- auto-extract essentials (once per session, on the first kotlin buffer /
--- gradle project; the cache scan itself at most once a day)
--------------------------------------------------------------------
-
-local RESCAN_SECONDS = 24 * 60 * 60
-
-local function file_has(path, ...)
-    local ok, lines = pcall(vim.fn.readfile, path)
-    if not ok then return false end
-    for _, l in ipairs(lines) do
-        for _, needle in ipairs({ ... }) do
-            if l:find(needle, 1, true) then return true end
-        end
-    end
-    return false
-end
-
--- Android plugin applied in the root / a module build script (directly or via
--- a version-catalog alias), or a module with a main AndroidManifest.xml.
--- Reads only known files: never walks the tree.
-function M.is_android_project(root)
-    if not root then return false end
-    local dirs = { root }
-    for _, m in ipairs(require("kotlin-lite.runner").modules(root)) do
-        dirs[#dirs + 1] = root .. "/" .. (m:sub(2):gsub(":", "/"))
-    end
-    for _, d in ipairs(dirs) do
-        for _, f in ipairs({ "build.gradle.kts", "build.gradle" }) do
-            if file_has(d .. "/" .. f, "com.android", "android.application", "android.library") then
-                return true
-            end
-        end
-        if vim.fn.filereadable(d .. "/src/main/AndroidManifest.xml") == 1 then return true end
-    end
-    return file_has(root .. "/gradle/libs.versions.toml", "com.android")
-end
-
--- Was the cache scanned for `key` less than RESCAN_SECONDS ago? Marks it if not.
-local function recently_scanned(key)
-    local stamp = cfg().cache_dir .. "/.auto_extract." .. key
-    local st = vim.uv.fs_stat(stamp)
-    if st and os.time() - st.mtime.sec < RESCAN_SECONDS then return true end
-    vim.fn.mkdir(cfg().cache_dir, "p")
-    vim.fn.writefile({}, stamp)
-    return false
-end
-
--- Extract (quietly) the newest sources jar for each essential artifact that is
--- present in the gradle / maven caches but not yet extracted. `root` is the
--- gradle project root (nil outside one: kotlin + test essentials only).
-function M.auto_extract(root)
-    local opts = cfg()
-    if not opts.auto_extract then return end
-
-    local groups = { opts.essentials.kotlin, opts.essentials.test }
-    local android = M.is_android_project(root)
-    if android then
-        table.insert(groups, opts.essentials.android)
-        table.insert(groups, opts.essentials.compose)
-    end
-    local wanted = {}
-    for _, g in ipairs(groups) do
-        for _, a in ipairs(g or {}) do wanted[a] = true end
-    end
-    if vim.tbl_isempty(wanted) then return end
-    if recently_scanned(android and "android" or "jvm") then return end
-
-    find_source_jars(function(jars)
-        if not jars or #jars == 0 then return end
-        local matched = vim.tbl_filter(function(j)
-            local artifact, _, classifier = parse_nv(vim.fn.fnamemodify(j, ":t"))
-            return wanted[artifact] and not classifier
-        end, jars)
-        local done = extracted_set()
-        local pins = root and M._project_pins(root .. "/build.gradle.kts") or nil
-        for _, e in ipairs(latest_by_artifact(matched, pins)) do
-            if not done[e.base] then M.extract_jar(e.jar, true) end
-        end
-    end)
-end
-
--------------------------------------------------------------------
 -- the project's libraries: one version each, the variants that fit
 -------------------------------------------------------------------
 
@@ -402,7 +322,8 @@ end
 --- { dir, base, artifact, version, classifier?, group?, id? } of an
 --- extracted dir. group: from the jar's path (.jarpath), when known. id: the
 --- library ("androidx.core:core:" + classifier) by its sources' root package,
---- nil without sources: dirs of one id are versions of one library
+--- without sources by its group, else nil: dirs of one id are versions of
+--- one library
 function M.info(dir)
     local i = infos[dir]
     if i then return i end
@@ -411,9 +332,11 @@ function M.info(dir)
     local ok, lines = pcall(vim.fn.readfile, dir .. "/.jarpath")
     local path = ok and lines[1] or nil
     local pkg = root_package(dir)
+    local group = path and path ~= "" and M._group_of(path, artifact, version) or nil
+    -- no sources (a -ktx shell, an aggregate): by the group, when known
+    local lib = pkg or (group and "@" .. group)
     i = { dir = dir, base = base, artifact = artifact, version = version, classifier = classifier,
-        group = path and path ~= "" and M._group_of(path, artifact, version) or nil,
-        id = pkg and (pkg .. ":" .. artifact .. ":" .. (classifier or "")) or nil }
+        group = group, id = lib and (lib .. ":" .. artifact .. ":" .. (classifier or "")) or nil }
     infos[dir] = i
     return i
 end
@@ -497,12 +420,17 @@ local function read_lines(path)
     return ok and lines or {}
 end
 
--- pins of the gradle project of `path`: its catalog, the root and module build scripts
-local function project_pins(path)
+-- the gradle project of `path`: the dir of its settings script
+local function project_root(path)
     local settings = vim.fs.find({ "settings.gradle.kts", "settings.gradle" },
         { upward = true, path = vim.fs.dirname(path), limit = 1 })[1]
-    if not settings then return {} end
-    local root = vim.fs.dirname(settings)
+    return settings and vim.fs.dirname(settings) or nil
+end
+
+-- pins of the gradle project of `path`: its catalog, the root and module build scripts
+local function project_pins(path)
+    local root = project_root(path)
+    if not root then return {} end
     local build = {}
     for _, f in ipairs({ root .. "/build.gradle.kts", root .. "/build.gradle" }) do vim.list_extend(build, read_lines(f)) end
     local mod = vim.fs.find({ "build.gradle.kts", "build.gradle" }, { upward = true, path = vim.fs.dirname(path), limit = 1 })[1]
@@ -511,7 +439,59 @@ local function project_pins(path)
 end
 M._project_pins = project_pins
 
---- extracted dirs for code in `path`: of each library (group:artifact:
+-------------------------------------------------------------------
+-- the project's classpath, as :KotlinSourcesSync got it from gradle
+-------------------------------------------------------------------
+
+local function classpath_file(root)
+    return cfg().cache_dir .. "/.classpath/" .. vim.fn.sha256(root)
+end
+
+--- the -sources.jars of the compile classpaths of the project at `root`,
+--- nil before its first sync
+function M.classpath(root)
+    local ok, lines = pcall(vim.fn.readfile, classpath_file(root))
+    return ok and lines or nil
+end
+
+--- seconds since the epoch of the last sync of `root`, nil if never
+function M.synced_at(root)
+    local st = vim.uv.fs_stat(classpath_file(root))
+    return st and st.mtime.sec or nil
+end
+
+--- the classpath of `root` is `jars` (replace), else gets `jars` too (a
+--- library added to the build since the sync; nothing before a first sync).
+--- -> any jar new to it
+function M.record_classpath(root, list, replace)
+    local cur = M.classpath(root)
+    if not cur and not replace then return false end
+    cur = replace and {} or cur
+    local seen, added = {}, false
+    for _, j in ipairs(cur) do seen[j] = true end
+    for _, j in ipairs(list) do
+        if not seen[j] then
+            seen[j], added = true, true
+            cur[#cur + 1] = j
+        end
+    end
+    if added or replace then
+        table.sort(cur)
+        vim.fn.mkdir(vim.fs.dirname(classpath_file(root)), "p")
+        vim.fn.writefile(cur, classpath_file(root))
+        by_project = {}
+    end
+    return added
+end
+
+--- is the jar on the classpath of `root`? (true before a first sync)
+function M.on_classpath(root, jar)
+    local cp = M.classpath(root)
+    return not cp or vim.tbl_contains(cp, jar)
+end
+
+--- extracted dirs for code in `path`: after a sync only those of the
+--- project's classpath, else every one; of each library (group:artifact:
 --- classifier) the version the build pins, else the newest; of platform
 --- variants those fitting the file's platform (common code: only when the
 --- common artifact is missing). A dir without sources to tell its group by
@@ -521,6 +501,14 @@ function M.project_dirs(path)
     if by_project[path] then return by_project[path] end
     local all = M.jar_dirs()
     local pins = path ~= "" and project_pins(path) or {}
+    local root = path ~= "" and project_root(path) or nil
+    local cp = root and M.classpath(root)
+    if cp then
+        -- a dir is named by its jar's path: the dirs of older extractions too
+        local on = {}
+        for _, j in ipairs(cp) do on[extract_dir(j)] = true end
+        all = vim.tbl_filter(function(d) return on[d] end, all)
+    end
     local fp = false -- no file: every variant
     if path ~= "" then fp = require("kotlin-lite.sdk").platform(path) end
 

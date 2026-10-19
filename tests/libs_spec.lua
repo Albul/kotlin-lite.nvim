@@ -178,10 +178,15 @@ describe("jars.project_dirs", function()
         assert.are.same({ "core-1.18.0-sources.jar", "core-3.5.0-sources.jar", "kotlin-stdlib-2.0.0-sources.jar",
             "kotlinx-coroutines-core-1.9.0-sources.jar" }, names(JVM))
     end)
-    it("no sources to tell the library by: never merged", function()
-        lib("org.jetbrains.kotlin", "kotlin-stdlib-2.0.0-sources.jar", false)
-        lib("org.jetbrains.kotlin", "kotlin-stdlib-2.4.0-sources.jar", false)
-        assert.are.same({ "kotlin-stdlib-2.0.0-sources.jar", "kotlin-stdlib-2.4.0-sources.jar" }, names(JVM))
+    it("no sources (a -ktx shell): merged by the group", function()
+        lib("androidx.activity", "activity-ktx-1.10.1-sources.jar", false)
+        lib("androidx.activity", "activity-ktx-1.13.0-sources.jar", false)
+        assert.are.same({ "activity-ktx-1.13.0-sources.jar" }, names(JVM))
+    end)
+    it("no sources, no group: never merged", function()
+        vim.fn.writefile({}, lib("androidx.activity", "activity-ktx-1.10.1-sources.jar", false) .. "/.jarpath")
+        vim.fn.writefile({}, lib("androidx.activity", "activity-ktx-1.13.0-sources.jar", false) .. "/.jarpath")
+        assert.are.same({ "activity-ktx-1.10.1-sources.jar", "activity-ktx-1.13.0-sources.jar" }, names(JVM))
     end)
 end)
 
@@ -259,5 +264,16 @@ describe("gd with several versions extracted", function()
         jars.scan_cache()
         gd("libs/server/src/main/kotlin/libsdemo/Server.kt", "fun libsFlow()", "Flow<")
         assert.are.equal(pinned .. "/commonMain/kotlinx/coroutines/flow/Flow.kt", h.bufname())
+    end)    it("the jvm actual in a source set not named *Main (jvmJUnit5)", function()
+        lib("org.jetbrains.kotlin", "kotlin-test-2.4.20-sources.jar", { ["annotationsCommonMain/kotlin.test/Annotations.kt"] = {
+            "package kotlin.test", "", "public expect annotation class Test()" } })
+        local junit5 = lib("org.jetbrains.kotlin", "kotlin-test-junit5-2.4.20-sources.jar", {
+            ["annotationsCommonMain/kotlin.test/Annotations.kt"] = {
+                "package kotlin.test", "", "public expect annotation class Test()" },
+            ["jvmJUnit5/Annotations.kt"] = {
+                "package kotlin.test", "", "public actual typealias Test = org.junit.jupiter.api.Test" } })
+        jars.scan_cache()
+        gd("libs/server/src/main/kotlin/libsdemo/Server.kt", "@Test fun libsCase", "Test")
+        assert.are.equal(junit5 .. "/jvmJUnit5/Annotations.kt", h.bufname())
     end)
 end)

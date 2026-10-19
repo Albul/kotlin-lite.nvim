@@ -49,14 +49,14 @@ describe("startup", function()
         assert.are.same({}, child(""))
     end)
 
-    it("the first kotlin buffer scans the jar cache and the gradle caches", function()
+    it("the first kotlin buffer outside a gradle build scans the jar cache only: no gradle, no find", function()
         local calls = child([[
             vim.cmd("enew")
             vim.bo.filetype = "kotlin"
             require("kotlin-lite.jars").jar_dirs()
         ]])
         assert.is_true(has(calls, "fs.dir "), vim.inspect(calls))
-        assert.is_true(has(calls, "system find"), vim.inspect(calls))
+        assert.is_false(has(calls, "system "), vim.inspect(calls))
         assert.is_false(has(calls, "fs.find "), vim.inspect(calls)) -- no tree walk for Android
     end)
 end)

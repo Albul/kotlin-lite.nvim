@@ -29,7 +29,7 @@ require("lazy.minit").setup({
                 -- config.setup({}) in a test keeps them)
                 local config = require("kotlin-lite.config")
                 config.defaults.cache_dir = vim.fn.tempname()
-                config.defaults.auto_extract = false
+                config.defaults.auto_sync = false
                 -- the machine's JDK stays out: jdk_spec brings its own
                 config.defaults.jdk = false
                 require("kotlin-lite").setup({})

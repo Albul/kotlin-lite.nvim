@@ -26,7 +26,7 @@ local function start(root)
         local keymaps = require("kotlin-lite.keymaps")
         keymaps.attach_globals(keymaps.snacks_actions)
     end
-    vim.schedule(function() require("kotlin-lite.jars").auto_extract(root) end)
+    vim.schedule(function() require("kotlin-lite.fetch").auto_sync(root) end)
 end
 
 -- Treesitter folds of a buffer opened before the plugin was on 'runtimepath'
@@ -103,6 +103,16 @@ function M.init()
         start(gradle_root(0))
         require("kotlin-lite.jars").pick_sources_jar()
     end, { desc = "kotlin-lite: extract a *-sources.jar for navigation" })
+
+    vim.api.nvim_create_user_command("KotlinSourcesSync", function()
+        local fetch = require("kotlin-lite.fetch")
+        local name = vim.api.nvim_buf_get_name(0)
+        local root = fetch.build_root(name ~= "" and vim.fs.dirname(name) or vim.fn.getcwd())
+        if not root then
+            return vim.notify("kotlin-lite: not in a gradle build", vim.log.levels.WARN)
+        end
+        fetch.sync(root)
+    end, { desc = "kotlin-lite: extract the sources of every library on the build's classpaths" })
 
     vim.api.nvim_create_user_command("KotlinSourcesClear", function()
         require("kotlin-lite.jars").clear()

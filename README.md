@@ -37,17 +37,23 @@ or unavailable, and for reading library sources extracted from `*-sources.jar`.
 
 Commands:
 
+- `:KotlinSourcesSync` — the sources of every library on the build's compile
+  classpaths (all modules, tests too, every variant), like IntelliJ's Gradle
+  sync with "Download sources": gradle (the wrapper, a `--init-script` task, no
+  project changes) resolves each library's `sources` artifact, downloading what
+  isn't cached, and the jars are extracted. From then on the project sees only
+  those libraries, of the versions gradle resolved.
 - `:KotlinSources` (`<leader>ks`) — pick a `*-sources.jar` from `~/.gradle` /
-  `~/.m2` to extract so navigation reaches into library sources. Only the newest
-  version of each artifact is listed, extracted ones first.
-- `:KotlinSourcesClear` — clear the extracted jar cache.
+  `~/.m2` to extract by hand. Only the newest version of each artifact is
+  listed, extracted ones first.
+- `:KotlinSourcesClear` — clear the extracted jar cache (and what the syncs
+  recorded).
 
-On the first Kotlin buffer / gradle project of a session the newest cached
-sources for common libraries (kotlin stdlib, coroutines, serialization, test libs;
-androidx + Compose in Android projects) are extracted in the background — the
-gradle / maven caches are searched at most once a day (`:KotlinSourcesClear`
-resets that), plain startups do no disk work. Customize via `essentials`, disable
-with `auto_extract = false`.
+On the first Kotlin buffer of a gradle build the sync runs quietly in the
+background when the build was never synced or a build script (settings, the
+root / a module's `build.gradle(.kts)`, `gradle/libs.versions.toml`) changed
+since; it says something only when it extracted new sources. Plain startups and
+buffers outside a gradle build do no disk work. Disable with `auto_sync = false`.
 
 Sources on demand: `gd` on an imported class of a library whose sources aren't
 extracted (`no declaration of 'X' in a.b.c`) gets them, like IntelliJ's
@@ -55,7 +61,8 @@ extracted (`no declaration of 'X' in a.b.c`) gets them, like IntelliJ's
 extracted at once; otherwise gradle (the wrapper, a `--init-script` task of the
 file's module, no project changes) finds the classpath jar / aar holding the
 class — for a top-level fun / val, the ones with classes in its package — and
-resolves its `sources` artifact through the project's repositories. Then the jump. JDK /
+resolves its `sources` artifact through the project's repositories. Then the
+jump; a library the build got since its last sync joins its classpath. JDK /
 android packages and packages the project declares are skipped; "no sources
 published" is remembered for the session.
 
@@ -90,13 +97,15 @@ and the members of Java types Kotlin maps to its own (`java.lang.String`,
 the toolchain's is said once.
 
 Library versions: every project the jar cache served leaves its versions in it
-(three `kotlin-stdlib`s, two `coroutines-core`s). For a file only one version of
-each library is searched — the one its build pins (`libs.versions.toml`, a
+(three `kotlin-stdlib`s, two `coroutines-core`s). A synced build sees only its
+classpath's libraries. Either way, for a file only one version of each library
+is searched — the one its build pins (`libs.versions.toml`, a
 `"g:a:v"` in a build script, the Kotlin plugin's version for `kotlin-*`), else
 the newest — and of the platform variants (`-android`, `-desktop`, `-jvm`,
 `-ios*`, ...) those its platform uses (common code: the common artifact only).
-A library is told by artifact name and the root package of its sources, so
-`androidx.core:core` and another `core` stay apart. A file several searched
+A library is told by artifact name and the root package of its sources (a jar
+without sources: by its group), so `androidx.core:core` and another `core` stay
+apart. A file several searched
 dirs ship (KMP common sources in `x` and `x-jvm`, SDK sources and stubs) counts
 once.
 
@@ -178,7 +187,7 @@ require("kotlin-lite").setup({
     symbols = { icons = { --[[ class/interface/object/companion/fun/field ]] } },
     intellij_keymaps = false,               -- register IntelliJ maps in addition to the vim ones
     snacks_integration = true,              -- optional snacks.nvim explorer (see below)
-    auto_extract = true,                    -- extract essential library sources (first kotlin buffer)
+    auto_sync = true,                       -- :KotlinSourcesSync when the build changed (first kotlin buffer)
     android_sdk = nil,                      -- Android SDK dir (nil: $ANDROID_HOME, ...; false: none)
     jdk = true,                             -- JDK sources (true: the toolchain's; a JDK home; false: none)
     jdk_modules = { "java.base", "java.logging", "java.net.http", "java.sql" },
@@ -187,7 +196,6 @@ require("kotlin-lite").setup({
     highlight_references = true,            -- on CursorHold, highlight the symbol's occurrences (by scope)
     unused_imports = true,                  -- grey out the imports nothing uses
     textobjects = false,                    -- af / if (fun), ac / ic (class / object) text objects
-    -- essentials = { kotlin = {...}, android = {...} }, -- artifact names to auto-extract
     run = {
         height = 15,                        -- bottom terminal split height
         main_property = "mainClass",        -- gradle -P property for run_file (see Runners)
@@ -332,8 +340,8 @@ are forced by clearing the module's `build/test-results` (no dependency on a
 lua/kotlin-lite/
 ├── init.lua      -- setup()/init(), autocmds, user commands
 ├── config.lua    -- defaults + option merging
-├── jars.lua      -- *-sources.jar discovery, extraction, a project's versions, read-only cache
-├── fetch.lua     -- gd on a library class without sources: gradle cache, else gradle downloads them
+├── jars.lua      -- *-sources.jar discovery, extraction, a project's classpath / versions, read-only cache
+├── fetch.lua     -- sources from gradle: :KotlinSourcesSync, gd on a library class without sources
 ├── sdk.lua       -- platform sources: Android SDK (compileSdk) / JDK (toolchain)
 ├── search.lua    -- ripgrep (+ parallel / cancellable engine) + Kotlin decl patterns + in-buffer search
 ├── scope.lua     -- file structure: comments / strings masked, {} blocks, where a decl is visible
