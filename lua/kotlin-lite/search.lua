@@ -44,7 +44,9 @@ local function rg_cmd(extra, dirs)
     return cmd
 end
 
--- rg --vimgrep output -> quickfix-style items deduped by file:line
+-- rg --vimgrep output -> quickfix-style items deduped by file:line, by file
+-- and line: rg's threads print in any order, what reads the items must not
+-- depend on it (a budget of files to read, the first of equals)
 local function parse(stdout)
     local items, seen = {}, {}
     for _, line in ipairs(vim.split(stdout or "", "\n", { trimempty = true })) do
@@ -63,8 +65,14 @@ local function parse(stdout)
             end
         end
     end
+    table.sort(items, function(a, b)
+        if a.filename ~= b.filename then return a.filename < b.filename end
+        return a.lnum < b.lnum
+    end)
     return items
 end
+
+M._parse = parse
 
 -- run rg, callback with the items on the main loop
 function M.rg(extra, dirs, cb)

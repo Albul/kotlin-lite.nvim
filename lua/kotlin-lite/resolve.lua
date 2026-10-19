@@ -577,11 +577,23 @@ local function owner_files(hits, set)
 end
 
 -- files read for member hits before giving up (they're mostly locals)
-local READ_BUDGET = 300
+M.READ_BUDGET = 300
 
 -- hits classified on demand: top-level ones from their text, members cost a
 -- file read, so only files that can hold the member are read first
-local function new_pool(hits, word, read)
+-- dirs of the packages `hdr` sees ("/kotlin/collections/"): the jar files
+-- read first when not all of them can be
+local function seen_dirs(hdr)
+    local pkgs = { hdr.package }
+    for _, q in pairs(hdr.explicit) do pkgs[#pkgs + 1] = q end
+    vim.list_extend(pkgs, hdr.wildcards)
+    vim.list_extend(pkgs, vim.tbl_keys(imports.DEFAULT))
+    local dirs = {}
+    for _, p in pairs(pkgs) do dirs[#dirs + 1] = "/" .. p:gsub("%.", "/") .. "/" end
+    return dirs
+end
+
+local function new_pool(hits, word, read, hdr)
     for _, it in ipairs(hits) do
         if (it.indent or 0) > 0 then
             read.need[it.filename] = math.max(read.need[it.filename] or 0, it.lnum)
@@ -614,13 +626,24 @@ local function new_pool(hits, word, read)
         end
     end
 
-    --- the rest: top level, project members, jar members (READ_BUDGET files)
+    --- the rest: top level, project members, jar members (READ_BUDGET files:
+    --- those of the packages the file sees first)
     function P.take_all()
         P.take(function(it) return (it.indent or 0) == 0 end)
-        local budget = READ_BUDGET
-        for _, jar in ipairs({ false, true }) do
+        local budget = M.READ_BUDGET
+        local dirs = hdr and seen_dirs(hdr) or {}
+        local function seen(f)
+            local dir = vim.fs.dirname(f) .. "/"
+            for _, d in ipairs(dirs) do
+                if dir:sub(-#d) == d then return true end
+            end
+            return false
+        end
+        for _, pass in ipairs({ { false }, { true, true }, { true, false } }) do
+            local jar, wanted = pass[1], pass[2]
             for i, it in ipairs(hits) do
-                if not done[i] and jars.is_jar(it.filename) == jar then
+                if not done[i] and jars.is_jar(it.filename) == jar
+                    and (not jar or seen(it.filename) == wanted) then
                     local fresh = not P.read.has(it.filename)
                     if not fresh or budget > 0 then
                         if fresh then budget = budget - 1 end
@@ -938,7 +961,7 @@ end
 -- `final` = false: project hits only; nil unless jars can't change the answer
 local function decide(ctx, word, opts, hits, read, headers, final)
     local implicit = opts.implicit and keys(opts.implicit) or {}
-    local pool = new_pool(hits, word, read)
+    local pool = new_pool(hits, word, read, ctx.hdr)
 
     if opts.qualifier then
         pool.take(function(it)

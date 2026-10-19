@@ -55,6 +55,16 @@ local COMMON = h.fixtures .. "/libs/kmp/src/commonMain/kotlin/libsdemo/Common.kt
 local DESKTOP = h.fixtures .. "/libs/kmp/src/desktopMain/kotlin/libsdemo/Desktop.kt"
 local UNPINNED = h.fixtures .. "/jdk/kmp/src/jvmMain/kotlin/jdkdemo/Jvm.kt"
 
+describe("rg hits", function()
+    it("in the order of file and line, whatever order rg printed them in", function()
+        local items = require("kotlin-lite.search")._parse(table.concat({
+            "/b/B.kt:3:1:x", "/a/A.kt:9:1:x", "/b/B.kt:1:1:x", "/a/A.kt:2:1:x", "/a/A.kt:9:5:x",
+        }, "\n"))
+        assert.are.same({ "/a/A.kt:2", "/a/A.kt:9", "/b/B.kt:1", "/b/B.kt:3" },
+            vim.tbl_map(function(it) return it.filename .. ":" .. it.lnum end, items))
+    end)
+end)
+
 describe("jar identity", function()
     it("a classifier is not a version: -samples", function()
         assert.are.same({ "ui", "1.11.2", "samples" }, { jars._parse_nv("ui-1.11.2-samples-sources.jar") })
@@ -389,6 +399,31 @@ describe("gd with several versions extracted", function()
             h.cursor_at("fun libsRender()", "render")
             actions.goto_definition()
             assert.is_true(h.wait(function() return sel.list ~= nil end))
+        end)
+    end)
+    describe("more member hits than files to read", function()
+        local resolve = require("kotlin-lite.resolve")
+        local budget
+        before_each(function() budget = resolve.READ_BUDGET end)
+        after_each(function() resolve.READ_BUDGET = budget end)
+
+        it("the files of the packages the file sees go first", function()
+            local function tagged(group, base)
+                return lib(group, base, { [group:gsub("%.", "/") .. "/Tagged.kt"] = {
+                    "package " .. group, "", "class Tagged {", "    val tag: String = \"\"", "}" } })
+            end
+            -- the unseen one first in the order of the hits
+            local seen, other
+            for v = 1, 50 do
+                seen, other = tagged("com.zzz.seen", "seen-1." .. v .. "-sources.jar"), tagged("com.aaa.other", "other-1.0-sources.jar")
+                if other < seen then break end
+                vim.fn.delete(seen, "rf")
+            end
+            assert.is_true(other < seen)
+            jars.scan_cache()
+            resolve.READ_BUDGET = 1
+            gd("libs/server/src/main/kotlin/libsdemo/Server.kt", "fun libsTag()", "tag")
+            assert.are.equal(seen .. "/com/zzz/seen/Tagged.kt", h.bufname())
         end)
     end)
     it("a member of a java interface with its brace on a line of its own", function()

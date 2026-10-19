@@ -2,6 +2,7 @@ package libsdemo
 
 import kotlinx.coroutines.flow.Flow
 import kotlin.test.Test
+import com.zzz.seen.*
 import com.example.io.Doc
 import com.example.io.Note
 import com.example.io.render
@@ -31,3 +32,5 @@ fun libsRender() = Doc().toSheet().render()
 fun libsRenderFq() = com.example.io.Doc().toSheet().render()
 fun libsCast(x: Any) = (x as Note).render()
 fun libsCastQ(x: Any) = (x as? com.example.io.Note)?.render()
+
+fun libsTag() = listOf(1).first().tag
