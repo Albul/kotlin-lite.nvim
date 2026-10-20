@@ -10,4 +10,8 @@ fun bank(a: Account) {
     open(name = "x").deposit(amount = 3)
     println("balance")
     open(name = "y").balance = 4
+    ledger().balance = 5
+    unknownThing().balance = 6
 }
+
+fun ledger() = usages.a.Ledger()

@@ -66,9 +66,9 @@ describe("gu by what the name resolves to", function()
 
     local cases = {
         { "member: not a shadowing local, a same-named member elsewhere, a typed receiver of another class",
-            ACC, "var balance = 0", "balance", 1, "a/Account.kt:15 a/Account.kt:4 a/Account.kt:8 b/Bank.kt:12 b/Bank.kt:7" },
+            ACC, "var balance = 0", "balance", 1, "a/Account.kt:15 a/Account.kt:4 a/Account.kt:8 b/Bank.kt:12 b/Bank.kt:13 b/Bank.kt:14 b/Bank.kt:7" },
         { "from a usage in another file", BANK, "a.balance = 1", "balance", 1,
-            "a/Account.kt:15 a/Account.kt:4 a/Account.kt:8 b/Bank.kt:12 b/Bank.kt:7" },
+            "a/Account.kt:15 a/Account.kt:4 a/Account.kt:8 b/Bank.kt:12 b/Bank.kt:13 b/Bank.kt:14 b/Bank.kt:7" },
         { "local: its scope only", ACC, "val balance = 5", "balance", 1, "a/Account.kt:10 a/Account.kt:9" },
         { "private member: its file", ACC, "private val secret", "secret", 1,
             "a/Account.kt:11 a/Account.kt:15 a/Account.kt:5" },
@@ -107,8 +107,12 @@ describe("rename by what the name resolves to", function()
 
     local preview = h.rename_preview
     local function press(lhs, needle) h.preview_press(lhs, needle) end
+    -- the preview's lines once its guesses are looked into
     local function rows()
-        return vim.api.nvim_buf_get_lines(preview(), 0, -1, false)
+        local function get() return vim.api.nvim_buf_get_lines(preview(), 0, -1, false) end
+        h.wait(function() return not table.concat(get(), "\n"):find("checking the receivers", 1, true) end)
+        vim.wait(80) -- the last render
+        return get()
     end
 
     -- rename `word` -> `new`; `keys`: what to press in the preview (default <CR>)
@@ -120,6 +124,7 @@ describe("rename by what the name resolves to", function()
         actions.rename()
         if keys ~= false then
             if preview() then
+                rows()
                 for _, k in ipairs(keys or { { "<CR>" } }) do press(k[1], k[2]) end
             end
         end
@@ -157,13 +162,15 @@ describe("rename by what the name resolves to", function()
         assert.are.equal("    a.funds = 1", b[7])
         assert.are.equal("    l.balance = 2", b[9])
         assert.are.equal('    println("balance")', b[11])
-        assert.are.equal('    open(name = "y").balance = 4', b[12], "a guess: unchecked")
+        assert.are.equal('    open(name = "y").funds = 4', b[12], "the receiver's type looked up: Account")
+        assert.are.equal("    ledger().balance = 5", b[13], "the receiver's type looked up: Ledger")
+        assert.are.equal("    unknownThing().balance = 6", b[14], "a guess: unchecked")
     end)
 
     it("the preview: by file, certain ones checked, guesses not", function()
         rename(ACC, "var balance = 0", "balance", "funds", false)
         local r = rows()
-        assert.are.equal("Rename balance → funds   4 of 5 selected", r[1])
+        assert.are.equal("Rename balance → funds   5 of 7 selected", r[1])
         local function row(needle)
             for _, l in ipairs(r) do
                 if l:find(needle, 1, true) then return l end
@@ -172,7 +179,9 @@ describe("rename by what the name resolves to", function()
         local all = table.concat(r, "\n")
         assert.is_not_nil(row("[x]      4  var balance = 0"), all)
         assert.is_not_nil(row("[x]      7  a.balance = 1"), all)
-        assert.is_not_nil(row('[ ]?    12  open(name = "y").balance = 4'), all)
+        assert.is_not_nil(row('[x]     12  open(name = "y").balance = 4'), all)
+        assert.is_not_nil(row("[ ]?    14  unknownThing().balance = 6"), all)
+        assert.is_not_nil(row("[ ]     13  ledger().balance = 5"), all)
         -- the new name shown inline at each checked occurrence
         local ns = require("kotlin-lite.rename_preview").ns
         local inline = 0
@@ -183,16 +192,23 @@ describe("rename by what the name resolves to", function()
                 assert.are.equal("balance", r[m[2] + 1]:sub(m[3] + 1, m[4].end_col))
             end
         end
-        assert.are.equal(4, inline)
+        assert.are.equal(5, inline)
+        -- the other type said
+        local said
+        for _, m in ipairs(vim.api.nvim_buf_get_extmarks(preview(), ns, 0, -1, { details = true })) do
+            local vt = m[4].virt_text
+            if vt and vt[1][1] == "  ← Ledger" then said = r[m[2] + 1] end
+        end
+        assert.are.equal("  [ ]     13  ledger().balance = 5", said)
         press("q")
         assert.is_nil(preview(true))
         assert.are.same(saved[ACC], vim.fn.readfile(h.fixtures .. "/" .. ACC))
     end)
 
     it("a guess checked by hand is renamed too", function()
-        rename(ACC, "var balance = 0", "balance", "funds", { { "<Space>", "open" }, { "<CR>" } })
-        h.wait(function() return vim.fn.readfile(h.fixtures .. "/" .. BANK)[12]:find("funds") ~= nil end)
-        assert.are.equal('    open(name = "y").funds = 4', vim.fn.readfile(h.fixtures .. "/" .. BANK)[12])
+        rename(ACC, "var balance = 0", "balance", "funds", { { "<Space>", "unknownThing" }, { "<CR>" } })
+        h.wait(function() return vim.fn.readfile(h.fixtures .. "/" .. BANK)[14]:find("funds") ~= nil end)
+        assert.are.equal("    unknownThing().funds = 6", vim.fn.readfile(h.fixtures .. "/" .. BANK)[14])
         assert.are.equal("    a.funds = 1", vim.fn.readfile(h.fixtures .. "/" .. BANK)[7])
     end)
 
@@ -239,5 +255,30 @@ describe("rename by what the name resolves to", function()
         assert.is_true(vim.bo[vim.fn.bufnr(h.fixtures .. "/" .. BANK)].modified)
         assert.is_truthy(cap.msg:find("not written (had unsaved changes): ", 1, true), cap.msg)
         assert.is_truthy(cap.msg:find("Bank.kt", 1, true), cap.msg)
+    end)
+end)
+
+describe("rename preview controller", function()
+    after_each(h.reset)
+
+    it("a verdict checks / unchecks a guess, not one the user toggled", function()
+        local path = h.fixtures .. "/usages/a/Account.kt"
+        local items = {
+            { filename = path, lnum = 4, col = 9, end_col = 16, guess = true },
+            { filename = path, lnum = 8, col = 9, end_col = 16, guess = true },
+            { filename = path, lnum = 15, col = 24, end_col = 31, guess = true },
+        }
+        local ctrl = require("kotlin-lite.rename_preview").open(items, { word = "balance", new = "funds", on_apply = function() end })
+        h.preview_press("<Space>", "balance += amount") -- the user checks line 8
+        ctrl.update(items[1], "sure")
+        ctrl.update(items[2], false, "Ledger")
+        ctrl.update(items[3], false, "Ledger")
+        vim.wait(80)
+        local r = vim.api.nvim_buf_get_lines(ctrl.buf, 0, -1, false)
+        local all = table.concat(r, "\n")
+        assert.is_truthy(all:find("[x]      4  var balance", 1, true), all)
+        assert.is_truthy(all:find("[x]      8  balance += amount", 1, true), all)
+        assert.is_truthy(all:find("[ ]     15  fun total", 1, true), all)
+        assert.is_falsy(all:find("[?]", 1, true), all)
     end)
 end)

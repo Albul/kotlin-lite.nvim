@@ -13,6 +13,9 @@ local M = {}
 -- files filtered before keeping the rest as is
 local SCAN_BUDGET = 400
 
+-- ms the receiver's type of one guess may take to look up (M.find's refine)
+M.GUESS_ITEM_MS = 500
+
 local function file_lines(path)
     local b = vim.fn.bufnr(path)
     if b ~= -1 and vim.api.nvim_buf_is_loaded(b) then return vim.api.nvim_buf_get_lines(b, 0, -1, false) end
@@ -118,6 +121,40 @@ local function it_usages(ctx, lambda)
     return out
 end
 
+-- a receiver's type, looked up like gd does (only when S.deep, else
+-- "guess"): a type of the family -> "sure", another -> false (S.other = its
+-- name), unknown -> "guess"
+local function typed(S, path, sc, r)
+    if not S.deep then return "guess" end
+    local base = S.bases[path]
+    if not base then
+        base = { path = path, sc = sc, hdr = imports.parse(vim.list_slice(sc.lines, 1, 200)) }
+        S.bases[path] = base
+    end
+    -- one lookup per lambda's `it` / per variable (its visible declaration)
+    local key
+    if r.kind == "chain" and #r.segs == 1 then
+        local p = scope.key(r.lnum, r.col)
+        local d = r.segs[1] == "it" and resolve.it_lambda(sc, p)
+            or scope.visible(scope.decls(sc, r.segs[1]), p, nil)
+        key = d and (path .. ":" .. (d.open or (d.lnum .. ":" .. d.col)))
+    end
+    local t
+    if key and S.typed[key] ~= nil then
+        t = S.typed[key] or nil
+    else
+        t = resolve.receiver_type_name(base, r, S.E)
+        if key and not S.E.over then S.typed[key] = t or false end
+    end
+    if not t or t:match("^%u%d?$") then return "guess" end -- (a type parameter)
+    for _, o in ipairs(S.sym.owners) do
+        if o.name == t then return "sure" end
+    end
+    if S.family()[t] then return "sure" end
+    S.other = t
+    return false
+end
+
 -- does the occurrence at (l, c) of `sc` (file `path`) mean `sym`? -> "sure",
 -- "guess" (kept for want of the receiver's type) or false
 local function means(S, path, sc, l, c)
@@ -165,6 +202,7 @@ local function means(S, path, sc, l, c)
         return false
     end
     if r.kind == "this" or r.kind == "super" then return in_family() end
+    if r.kind == "call" then return typed(S, path, sc, r) end
     if r.kind ~= "chain" then return "guess" end
     local t
     if r.ctor or r.segs[#r.segs]:match("^%u") then
@@ -173,14 +211,16 @@ local function means(S, path, sc, l, c)
         local d = scope.visible(scope.decls(sc, r.segs[1]), scope.key(r.lnum, r.col), nil)
         t = d and resolve.declared_type(sc, d, r.segs[1])
     end
-    if not t then return "guess" end
+    if not t then return typed(S, path, sc, r) end
     for _, o in ipairs(sym.owners) do
         if o.name == t then return "sure" end
     end
     return S.family()[t] == true and "sure"
 end
 
---- -> { items, sym, decl, here_only } | { items, generated } | { unresolved = true, err? }
+--- -> { items, sym, decl, here_only, refine? } | { items, generated } | { unresolved = true, err? }
+--- refine(item of a guess) -> "sure" | "guess" | false, the receiver's type
+--- when another: the guess with its receiver's type looked up (in E's coroutine)
 function M.find(ctx, E)
     local res = resolve.resolve(ctx, E, { stay = true })
     if res.err then return { unresolved = true, err = res.err } end
@@ -202,7 +242,7 @@ function M.find(ctx, E)
         return { items = out, sym = sym, decl = decl, here_only = here_only }
     end
 
-    local S = { sym = sym, decl = decl }
+    local S = { sym = sym, decl = decl, E = E, bases = { [ctx.path] = ctx.base or ctx }, typed = {}, scans = {} }
     local family
     function S.family()
         if not family then
@@ -229,6 +269,7 @@ function M.find(ctx, E)
     for i, path in ipairs(order) do
         local lines = path == ctx.path and ctx.sc.lines or file_lines(path)
         local sc = path == ctx.path and ctx.sc or scope.scan(lines)
+        S.scans[path] = sc
         local visible = true
         if #sym.owners == 0 and path ~= decl.filename then
             local hdr = imports.parse(vim.list_slice(lines, 1, 200))
@@ -253,7 +294,19 @@ function M.find(ctx, E)
             end
         end
     end
-    return { items = out, sym = sym, decl = decl }
+
+    local function refine(it)
+        local sc = S.scans[it.filename]
+        if not sc then return "guess" end
+        local top = not E.deadline
+        if top then E.deadline, E.over = vim.uv.hrtime() + M.GUESS_ITEM_MS * 1e6, false end
+        S.deep, S.other = true, nil
+        local v = means(S, it.filename, sc, it.lnum, it.col - 1)
+        S.deep = false
+        if top then E.deadline, E.over = nil, nil end
+        return v, S.other
+    end
+    return { items = out, sym = sym, decl = decl, refine = refine }
 end
 
 return M

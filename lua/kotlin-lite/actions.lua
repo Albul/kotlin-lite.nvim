@@ -394,9 +394,10 @@ local function apply_rename(items, new, save, word)
     return vim.tbl_count(by_file), kept, skipped
 end
 
--- the rename preview of `items`; <CR> applies what is checked
-function M._preview_rename(items, word, new, note)
-    require("kotlin-lite.rename_preview").open(items, {
+-- the rename preview of `items`; <CR> applies what is checked. `refine`
+-- (usages.find's, in its coroutine): the guesses looked into while it's open
+function M._preview_rename(items, word, new, note, refine)
+    local ctrl = require("kotlin-lite.rename_preview").open(items, {
         word = word, new = new, note = note,
         on_apply = function(selected)
             local n, kept, skipped = apply_rename(selected, new, true, word)
@@ -406,6 +407,14 @@ function M._preview_rename(items, word, new, note)
             vim.notify(msg, (#kept > 0 or skipped > 0) and vim.log.levels.WARN or vim.log.levels.INFO)
         end,
     })
+    if not refine then return end
+    local guesses = vim.tbl_filter(function(it) return it.guess end, items)
+    if #guesses > 0 then ctrl.progress(0, #guesses) end
+    for i, it in ipairs(guesses) do
+        if not ctrl.alive() then return end
+        ctrl.update(it, refine(it))
+        ctrl.progress(i, #guesses)
+    end
 end
 
 -- rename what `ctx` resolves to: a local in place (unless `always_preview`),
@@ -432,7 +441,7 @@ local function rename_at(ctx, word, new, always_preview)
             })
         end
         if u.here_only and not always_preview then return apply_rename(u.items, new, false) end
-        M._preview_rename(u.items, word, new)
+        M._preview_rename(u.items, word, new, nil, u.refine)
     end, "rename", ctx)
 end
 

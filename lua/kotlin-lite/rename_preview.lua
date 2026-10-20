@@ -1,5 +1,8 @@
 -- Rename preview: every occurrence a rename would change, by file, each with a
--- checkbox. Guesses (the receiver's type unknown) start unchecked; <CR>
+-- checkbox. Guesses (the receiver's type unknown) start unchecked and are
+-- looked into while the preview is open (M.open's controller): one whose
+-- receiver turns out of the type gets checked, of another type stays
+-- unchecked with that type shown; what the user toggled stays as is. <CR>
 -- applies what is checked. Files with unsaved changes get the edit but are
 -- not written: the user's own changes are theirs to save.
 
@@ -54,14 +57,12 @@ local function group(items)
 end
 
 --- Open the preview of renaming `o.word` -> `o.new` at `items`;
---- o.on_apply(selected items) on <CR>. -> the preview buffer
+--- o.on_apply(selected items) on <CR>.
+--- -> { buf, alive(), update(item, verdict, other), progress(done, total) }
 function M.open(items, o)
     local files = group(items)
     local unsaved = M.unsaved(items)
-    local guesses = 0
-    for _, it in ipairs(items) do
-        if it.guess then guesses = guesses + 1 end
-    end
+    local checking -- { done, total } while guesses are looked into
 
     vim.cmd("botright new")
     local win, buf = vim.api.nvim_get_current_win(), vim.api.nvim_get_current_buf()
@@ -99,6 +100,16 @@ function M.open(items, o)
         local head = ("Rename %s → %s   %d of %d selected"):format(o.word, o.new, count(), #items)
         mark(add(head), 0, #head, "Title")
         mark(add(HELP), 0, #HELP, "Comment")
+        local guesses = 0
+        for _, f in ipairs(files) do
+            for _, e in ipairs(f.items) do
+                if e.it.guess then guesses = guesses + 1 end
+            end
+        end
+        if checking then
+            local c = ("checking the receivers' types: %d of %d…"):format(checking[1], checking[2])
+            mark(add(c), 0, #c, "DiagnosticInfo")
+        end
         if guesses > 0 then
             local g = ("[?] %d where the receiver's type is unknown: unchecked, check what you mean"):format(guesses)
             mark(add(g), 0, #g, "DiagnosticWarn")
@@ -117,6 +128,9 @@ function M.open(items, o)
                 local code = e.line:sub(lead + 1)
                 local prefix = ("  %s%s %5d  "):format(e.sel and "[x]" or "[ ]", e.it.guess and "?" or " ", e.it.lnum)
                 l = add(prefix .. code, { file = f, entry = e })
+                if e.other then
+                    mark(l, 0, 0, nil, { virt_text = { { "  ← " .. e.other, "DiagnosticHint" } }, virt_text_pos = "eol" })
+                end
                 mark(l, 2, 5, e.sel and "DiagnosticOk" or "Comment")
                 if e.it.guess then mark(l, 5, 6, "DiagnosticWarn") end
                 local s = #prefix + (e.it.col - 1) - lead
@@ -157,7 +171,7 @@ function M.open(items, o)
         if #entries == 0 then return end
         local any = false
         for _, e in ipairs(entries) do any = any or e.sel end
-        for _, e in ipairs(entries) do e.sel = not any end
+        for _, e in ipairs(entries) do e.sel, e.touched = not any, true end
         render()
     end
     local function toggle_all()
@@ -166,7 +180,7 @@ function M.open(items, o)
             for _, e in ipairs(f.items) do all = all and e.sel end
         end
         for _, f in ipairs(files) do
-            for _, e in ipairs(f.items) do e.sel = not all end
+            for _, e in ipairs(f.items) do e.sel, e.touched = not all, true end
         end
         render()
     end
@@ -235,6 +249,38 @@ function M.open(items, o)
         end)
     end
 
+    -- the controller: re-rendered at most every 50 ms while guesses are looked into
+    local by_item, pending = {}, false
+    for _, f in ipairs(files) do
+        for _, e in ipairs(f.items) do by_item[e.it] = e end
+    end
+    local function alive() return vim.api.nvim_buf_is_valid(buf) end
+    local function later()
+        if pending then return end
+        pending = true
+        vim.defer_fn(function()
+            pending = false
+            if not alive() then return end
+            local cur = vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_cursor(win)
+            render()
+            if cur then pcall(vim.api.nvim_win_set_cursor, win, cur) end
+        end, 50)
+    end
+    local ctrl = { buf = buf, alive = alive }
+    -- verdict on a guess: "sure" -> checked, false -> unchecked, of type `other`
+    function ctrl.update(it, verdict, other)
+        local e = by_item[it]
+        if not e or verdict == "guess" then return end
+        e.it.guess = nil
+        e.other = verdict == false and other or nil
+        if not e.touched then e.sel = verdict == "sure" end
+        later()
+    end
+    function ctrl.progress(done, total)
+        checking = done < total and { done, total } or nil
+        later()
+    end
+
     render()
     vim.api.nvim_win_set_height(win, math.max(8, math.min(vim.api.nvim_buf_line_count(buf), math.floor(vim.o.lines / 2))))
     -- the first entry
@@ -244,7 +290,7 @@ function M.open(items, o)
             break
         end
     end
-    return buf
+    return ctrl
 end
 
 return M

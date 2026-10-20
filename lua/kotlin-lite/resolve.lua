@@ -1398,6 +1398,20 @@ local function receiver_type(ctx, r, E, depth)
     return value_type(ctx, E, ctx, r.lnum, col, depth)
 end
 
+--- name of the type of receiver `r` (resolve.receiver's) in `base` ({ path,
+--- sc, hdr }), looked up within E.deadline; nil when unknown
+function M.receiver_type_name(base, r, E)
+    local t
+    if r.kind == "chain" and #r.segs == 1 and r.segs[1] == "it" then
+        local b = M.it_lambda(base.sc, scope.key(r.lnum, r.col))
+        t = b and M.it_type(base, E, b)
+    else
+        t = receiver_type(base, r, E, 0)
+    end
+    if t and t.self then return t.self.sym.name end
+    return t and t.name
+end
+
 -- does the chain start at `this`, a decl of this buffer or an imported value?
 local function cheap_root(ctx, r)
     for _ = 1, MAX_DEPTH do
