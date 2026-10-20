@@ -127,6 +127,10 @@ the plugin's `queries/kotlin/folds.scm` extends the nvim-treesitter one: KDoc an
 `try` / `catch` / `finally` blocks and multi-line strings fold too. A file opened
 before the plugin loads (`event = "VeryLazy"`) gets them once it does.
 
+Highlights: `queries/kotlin/highlights.scm` extends the nvim-treesitter one so a
+`$name` template in a string is highlighted like `${...}` is (`$` as
+`@punctuation.special`, the name as `@variable`), not as plain string text.
+
 Breadcrumbs: `require("kotlin-lite.breadcrumbs").get()` is where the cursor is —
 `Counter › Companion › zero` — the classes and the function / property around it,
 "" outside Kotlin / Java buffers. Show it in the statusline, where LazyVim puts
@@ -368,6 +372,7 @@ lua/kotlin-lite/
 └── snacks.lua    -- optional snacks.nvim explorer integration (loaded lazily)
 plugin/kotlin-lite.lua  -- startup bootstrap
 queries/kotlin/folds.scm -- extra treesitter folds (comments, arguments, try / catch)
+queries/kotlin/highlights.scm -- `$name` string templates highlighted
 tests/                  -- fixtures, interactive harness, busted specs (*_spec.lua)
 ```
 

@@ -29,14 +29,23 @@ local function start(root)
     vim.schedule(function() require("kotlin-lite.fetch").auto_sync(root) end)
 end
 
--- Treesitter folds of a buffer opened before the plugin was on 'runtimepath'
--- miss its queries/kotlin/folds.scm. Setting the options again drops nvim's
--- query cache and recomputes the folds; scheduled, as OptionSet doesn't fire
--- inside the autocmd that loads the plugin (lazy's VeryLazy).
-local function refresh_folds()
+-- A buffer opened before the plugin was on 'runtimepath' misses its
+-- queries/kotlin (folds.scm, highlights.scm). Setting the options again drops
+-- nvim's query cache and recomputes the folds; a running treesitter
+-- highlighter keeps its query, so it is restarted. Scheduled, as OptionSet
+-- doesn't fire inside the autocmd that loads the plugin (lazy's VeryLazy).
+local function refresh_queries()
     vim.schedule(function()
         vim.go.runtimepath = vim.go.runtimepath
         vim.go.foldminlines = vim.go.foldminlines
+        for buf in pairs(vim.treesitter.highlighter.active) do
+            if vim.api.nvim_buf_is_valid(buf) and vim.bo[buf].filetype == "kotlin" then
+                pcall(function()
+                    vim.treesitter.stop(buf)
+                    vim.treesitter.start(buf)
+                end)
+            end
+        end
     end)
 end
 
@@ -64,7 +73,7 @@ local function register()
             open = true
         end
     end
-    if open then refresh_folds() end
+    if open then refresh_queries() end
 end
 
 -- one-time bootstrap: autocmds and user commands only (cheap, no disk scans)
