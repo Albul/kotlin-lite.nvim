@@ -20,7 +20,7 @@ or unavailable, and for reading library sources extracted from `*-sources.jar`.
 | `]r` / `[r`           | Next / previous occurrence of the symbol under the cursor — the ones highlighted on `CursorHold` (same scope rules), with a count, wrapping around per `'wrapscan'` |
 | `<leader>kh`          | Incoming calls (IntelliJ `Ctrl+Alt+H`) — the usages `gu` finds, each named after the function or property it is in (`Counter.bump`, `Counter.Companion.zero`, `main`), in the quickfix panel; imports and the declaration itself are left out |
 | `<leader>cr`          | Rename what the cursor resolves to, at exactly those usages: a local in the buffer (no prompt), anything else across files through a preview — every occurrence by file with its line and the new name inline, checked when certain, unchecked (`[?]`) where the receiver's type is unknown; `<Space>` toggles a line / a file / a visual range, `a` all, `p` shows the context, `<CR>` applies the checked ones and saves the files (a file that had unsaved changes gets the edit but is not written; an occurrence changed since the preview is skipped). An unresolved name previews every mention of the word. Library declarations are refused |
-| `<leader>cR`          | Rename file; for a same-named top-level `class`/`interface`/`object`/`fun` it offers a module-scoped symbol rename |
+| `<leader>cR`          | Rename file; a same-named top-level `class`/`interface`/`object`/`fun` is renamed with it like `<leader>cr` does — resolved from its declaration, wherever it's visible (other modules too), through the preview (`q` keeps just the file renamed). An open buffer with unsaved changes moves with them, not written |
 | `<leader>cs`          | File structure outline (braces in comments / strings don't count) — top-level decls & class members (incl. private/protected/internal, marked with a UML sigil), with kind icons (IntelliJ `Ctrl+F12`) |
 | `<leader>cS`          | Go to symbol — live-search picker over top-level classes/objects/interfaces/enums & functions (IntelliJ `Ctrl+N`) |
 | `<leader><leader>`    | Go to file (Telescope / snacks, best-effort)                           |
@@ -296,7 +296,7 @@ keys in the explorer window:
 | ------------- | ------------------------------------------------------------------- |
 | `<leader>km`  | Toggle **compact middle packages** (`com/example/foo` → `com.example.foo`); also global |
 | `a`           | Add file/dir — Kotlin-aware, seeds `package` + `class` from the directory |
-| `<leader>cR`  | Kotlin-aware rename (offers the module-scoped entity rename; disabled for a multi-selection) |
+| `<leader>cR`  | Kotlin-aware rename (the file's top-level entity too, through the preview; disabled for a multi-selection) |
 | `Y`           | Yank file(s) to the system clipboard (macOS `osascript`, Windows `Set-Clipboard`, Linux `wl-copy`/`xclip`/`xsel`) |
 | `zo` / `zO`   | Open directory (one level / recursively)                            |
 | `zA` / `zM`   | Toggle recursively / close all                                      |

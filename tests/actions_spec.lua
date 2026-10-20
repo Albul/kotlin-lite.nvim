@@ -86,6 +86,83 @@ describe("rename_file", function()
     end)
 end)
 
+describe("rename_file with its top-level entity", function()
+    -- a two-module project under the fixtures: lib declares rf.Widget, app
+    -- uses it, rfother.Widget is another class of the same name
+    local ROOT = h.fixtures .. "/renamefile"
+    local OLD, NEW = ROOT .. "/lib/src/main/kotlin/rf/Widget.kt", ROOT .. "/lib/src/main/kotlin/rf/Gadget.kt"
+    local USE = ROOT .. "/app/src/main/kotlin/rfapp/Use.kt"
+    local OTHER = ROOT .. "/app/src/main/kotlin/rfother/Uses.kt"
+    local function write(path, lines)
+        vim.fn.mkdir(vim.fs.dirname(path), "p")
+        vim.fn.writefile(lines, path)
+    end
+    before_each(function()
+        write(ROOT .. "/lib/build.gradle.kts", {})
+        write(ROOT .. "/app/build.gradle.kts", {})
+        write(OLD, { "package rf", "", "// a Widget", "class Widget {", '    val label = "Widget"', "}" })
+        write(USE, { "package rfapp", "", "import rf.Widget", "", "fun make(): Widget = Widget()" })
+        write(OTHER, { "package rfother", "", "class Widget", "", "fun other() = Widget()" })
+        h.stub(vim.ui, "input", function(_, cb) cb("Gadget") end)
+    end)
+    after_each(function()
+        h.reset()
+        vim.fn.delete(ROOT, "rf")
+    end)
+
+    local function rename_file()
+        h.open("renamefile/lib/src/main/kotlin/rf/Widget.kt")
+        actions.rename_file()
+    end
+
+    it("the entity by what it resolves to, in every module that sees it", function()
+        rename_file()
+        assert.is_not_nil(h.rename_preview())
+        h.preview_press("<CR>")
+        h.wait(function() return vim.fn.readfile(USE)[3] == "import rf.Gadget" end)
+        assert.are.same({ "package rfapp", "", "import rf.Gadget", "", "fun make(): Gadget = Gadget()" },
+            vim.fn.readfile(USE))
+        assert.are.same({ "package rf", "", "// a Widget", "class Gadget {", '    val label = "Widget"', "}" },
+            vim.fn.readfile(NEW))
+        assert.are.same({ "package rfother", "", "class Widget", "", "fun other() = Widget()" }, vim.fn.readfile(OTHER))
+        assert.are.equal(0, vim.fn.filereadable(OLD))
+    end)
+
+    it("the preview cancelled: the file renamed, nothing else", function()
+        rename_file()
+        h.preview_press("q")
+        assert.is_nil(h.rename_preview(true))
+        assert.are.equal("class Widget {", vim.fn.readfile(NEW)[4])
+        assert.are.equal("import rf.Widget", vim.fn.readfile(USE)[3])
+    end)
+
+    it("a buffer with unsaved changes: moved, the changes carried over, not written", function()
+        h.open("renamefile/lib/src/main/kotlin/rf/Widget.kt")
+        vim.api.nvim_buf_set_lines(0, 0, 0, false, { "// mine" })
+        h.cursor_at("class Widget", "Widget")
+        actions.rename_file()
+        assert.is_not_nil(h.rename_preview())
+        h.preview_press("q")
+        assert.are.equal(NEW, h.bufname())
+        assert.is_true(vim.bo.modified)
+        assert.are.equal("// mine", vim.api.nvim_buf_get_lines(0, 0, 1, false)[1])
+        assert.are.equal("class Widget", vim.api.nvim_get_current_line():match("^class Widget"))
+        assert.are.equal("package rf", vim.fn.readfile(NEW)[1], "the file as it was on disk")
+        assert.are.equal(0, vim.fn.filereadable(OLD))
+        assert.are.equal(-1, vim.fn.bufnr("^" .. OLD .. "$"))
+        vim.cmd("silent write") -- no E13: the buffer is the file's
+        assert.are.equal("// mine", vim.fn.readfile(NEW)[1])
+    end)
+
+    it("a buffer without changes: moved as it is", function()
+        rename_file()
+        h.preview_press("q")
+        assert.are.equal(NEW, h.bufname())
+        assert.is_false(vim.bo.modified)
+        assert.are.equal("class Widget {", vim.fn.readfile(NEW)[4])
+    end)
+end)
+
 describe("format_buffer", function()
     after_each(h.reset)
 

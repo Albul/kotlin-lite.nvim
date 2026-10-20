@@ -408,7 +408,34 @@ function M._preview_rename(items, word, new, note)
     })
 end
 
--- a local in place; anything else previewed, then saved
+-- rename what `ctx` resolves to: a local in place (unless `always_preview`),
+-- anything else previewed, then saved
+local function rename_at(ctx, word, new, always_preview)
+    require("kotlin-lite.resolve").run(function(ctx, E)
+        local u = require("kotlin-lite.usages").find(ctx, E)
+        if not u.items then return replace_word(word, new, search.root(), "project, unresolved") end
+        local g = u.generated
+        if g then
+            local msg = ("kotlin-lite: %s is %s, rename it in %s"):format(g.label, g.source.kind, g.home or g.source.home)
+            vim.notify(msg, vim.log.levels.WARN)
+            return
+        end
+        if jars.is_jar(u.decl.filename) then
+            vim.notify("kotlin-lite: '" .. word .. "' is declared in a library", vim.log.levels.WARN)
+            return
+        end
+        if u.decl.lambda then
+            local brace = u.decl.col + 1
+            table.insert(u.items, {
+                filename = u.decl.filename, lnum = u.decl.lnum, col = brace, end_col = brace,
+                insert = " " .. new .. " ->",
+            })
+        end
+        if u.here_only and not always_preview then return apply_rename(u.items, new, false) end
+        M._preview_rename(u.items, word, new)
+    end, "rename", ctx)
+end
+
 function M.rename()
     local word = vim.fn.expand("<cword>")
     if word == "" then return end
@@ -418,48 +445,28 @@ function M.rename()
             vim.notify("kotlin-lite: '" .. new .. "' is not a valid identifier", vim.log.levels.ERROR)
             return
         end
-        local resolve = require("kotlin-lite.resolve")
-        resolve.run(function(ctx, E)
-            local u = require("kotlin-lite.usages").find(ctx, E)
-            if not u.items then return replace_word(word, new, search.root(), "project, unresolved") end
-            local g = u.generated
-            if g then
-                local msg = ("kotlin-lite: %s is %s, rename it in %s"):format(g.label, g.source.kind, g.home or g.source.home)
-                vim.notify(msg, vim.log.levels.WARN)
-                return
-            end
-            if jars.is_jar(u.decl.filename) then
-                vim.notify("kotlin-lite: '" .. word .. "' is declared in a library", vim.log.levels.WARN)
-                return
-            end
-            if u.decl.lambda then
-                local brace = u.decl.col + 1
-                table.insert(u.items, {
-                    filename = u.decl.filename, lnum = u.decl.lnum, col = brace, end_col = brace,
-                    insert = " " .. new .. " ->",
-                })
-            end
-            if u.here_only then return apply_rename(u.items, new, false) end
-            M._preview_rename(u.items, word, new)
-        end, "rename")
+        rename_at(nil, word, new)
     end)
 end
 
 -------------------------------------------------------------------
 -- rename file (<leader>cR): move the file and, for a same-named
--- top-level entity, offer a module-scoped symbol rename
+-- top-level entity, rename it too (through the rename preview)
 -------------------------------------------------------------------
 
--- kind of a top-level class/interface/object/fun named `name`, or nil.
--- Anchored at column 0 (optional lowercase modifiers) so nested decls are ignored.
+-- kind of a top-level class/interface/object/fun named `name`, its line and
+-- the 0-based column of the name, or nil. Anchored at column 0 (optional
+-- lowercase modifiers) so nested decls are ignored.
 local function toplevel_entity(lines, name)
     local esc = vim.pesc(name)
-    for _, l in ipairs(lines) do
+    for i, l in ipairs(lines) do
         if l:match("^%S") then -- top-level only: no indentation
             for _, k in ipairs({ "class", "interface", "object" }) do
-                if l:match("^[%l ]*" .. k .. "%s+" .. esc .. "%f[%W]") then return k end
+                local s = l:match("^[%l ]*" .. k .. "%s+()" .. esc .. "%f[%W]")
+                if s then return k, i, s - 1 end
             end
-            if l:match("^[%l ]*fun%s+" .. esc .. "%s*[(<]") then return "fun" end
+            local s = l:match("^[%l ]*fun%s+()" .. esc .. "%s*[(<]")
+            if s then return "fun", i, s - 1 end
         end
     end
     return nil
@@ -495,34 +502,58 @@ function M.rename_path(old_path, on_done)
         end
 
         -- detect the entity before moving (read from buffer or disk)
-        local entity = ext == "kt" and toplevel_entity(read_lines(old_path), old_base) or nil
+        local entity, elnum, ecol
+        if ext == "kt" then entity, elnum, ecol = toplevel_entity(read_lines(old_path), old_base) end
 
         local bufnr = vim.fn.bufnr("^" .. old_path .. "$")
-        if bufnr ~= -1 and vim.api.nvim_buf_is_loaded(bufnr) then
+        local loaded = bufnr ~= -1 and vim.api.nvim_buf_is_loaded(bufnr)
+        local on_disk = vim.fn.filereadable(old_path) == 1
+        if loaded and not on_disk then
+            -- never written: the new name only
+            vim.api.nvim_buf_set_name(bufnr, new_path)
+        elseif loaded and not vim.bo[bufnr].modified then
             vim.api.nvim_buf_call(bufnr, function()
-                vim.cmd("keepalt saveas! " .. vim.fn.fnameescape(new_path))
+                vim.cmd("silent keepalt saveas! " .. vim.fn.fnameescape(new_path))
             end)
             vim.fn.delete(old_path)
-            local stale = vim.fn.bufnr("^" .. old_path .. "$")
-            if stale ~= -1 and stale ~= bufnr then
-                pcall(vim.api.nvim_buf_delete, stale, { force = true })
-            end
         else
             vim.fn.mkdir(dir, "p")
             if vim.fn.rename(old_path, new_path) ~= 0 then
                 vim.notify("kotlin-lite: rename failed", vim.log.levels.ERROR)
                 return
             end
+            if loaded then
+                -- unsaved changes: the moved file in a buffer of its own, the
+                -- changes carried over, not written (saveas would write them)
+                local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+                local ft = vim.bo[bufnr].filetype
+                local nb = vim.fn.bufadd(new_path)
+                vim.fn.bufload(nb)
+                if vim.bo[nb].filetype == "" then vim.bo[nb].filetype = ft end
+                vim.api.nvim_buf_set_lines(nb, 0, -1, false, lines)
+                for _, win in ipairs(vim.fn.win_findbuf(bufnr)) do
+                    local cur = vim.api.nvim_win_get_cursor(win)
+                    vim.api.nvim_win_set_buf(win, nb)
+                    pcall(vim.api.nvim_win_set_cursor, win, cur)
+                end
+                vim.api.nvim_buf_delete(bufnr, { force = true })
+                bufnr = nb
+            end
+        end
+        local stale = vim.fn.bufnr("^" .. old_path .. "$")
+        if stale ~= -1 and stale ~= bufnr then
+            pcall(vim.api.nvim_buf_delete, stale, { force = true })
         end
         vim.notify("kotlin-lite: renamed to " .. new_name, vim.log.levels.INFO)
         if on_done then on_done(new_path) end
 
         if entity and new_base:match("^[%a_][%w_]*$") then
-            local q = ("Also rename %s '%s' -> '%s' in the module?"):format(entity, old_base, new_base)
-            if vim.fn.confirm(q, "&Yes\n&No", 2) == 1 then
-                local module_root = vim.fs.root(new_path, { "build.gradle.kts", "build.gradle" }) or search.root()
-                replace_word(old_base, new_base, module_root, "module")
-            end
+            -- the entity, resolved from its declaration in the moved file
+            local nb = vim.fn.bufadd(new_path)
+            vim.fn.bufload(nb)
+            local resolve = require("kotlin-lite.resolve")
+            local ctx = resolve.context_at(resolve.base(nb), elnum, ecol)
+            if ctx then rename_at(ctx, old_base, new_base, true) end
         end
     end)
 end

@@ -72,6 +72,26 @@ function M.wait_jump(start, ms)
     return M.wait(function() return M.bufname() ~= start end, ms)
 end
 
+--- The rename preview's buffer once open (`now`: don't wait), else nil.
+function M.rename_preview(now)
+    local b
+    M.wait(function()
+        b = vim.iter(vim.api.nvim_list_bufs()):find(function(x)
+            return vim.api.nvim_buf_is_loaded(x) and vim.bo[x].filetype == "kotlinlite-rename"
+        end)
+        return b ~= nil
+    end, now and 1 or nil)
+    return b
+end
+
+--- Press `lhs` in the rename preview (made current), on the first line with
+--- `needle` when given.
+function M.preview_press(lhs, needle)
+    vim.api.nvim_set_current_buf(M.rename_preview())
+    if needle then M.cursor_at(needle, needle:match("[%w_]+")) end
+    vim.fn.maparg(lhs, "n", false, true).callback()
+end
+
 -------------------------------------------------------------------
 -- stubs, reverted by M.reset()
 -------------------------------------------------------------------

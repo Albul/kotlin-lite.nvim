@@ -105,22 +105,8 @@ describe("rename by what the name resolves to", function()
         for f, lines in pairs(saved) do vim.fn.writefile(lines, h.fixtures .. "/" .. f) end
     end)
 
-    -- the rename preview's buffer, once open
-    local function preview(now)
-        local b
-        h.wait(function()
-            b = vim.iter(vim.api.nvim_list_bufs()):find(function(x)
-                return vim.api.nvim_buf_is_loaded(x) and vim.bo[x].filetype == "kotlinlite-rename"
-            end)
-            return b ~= nil
-        end, now and 1 or nil)
-        return b
-    end
-    -- press `lhs` in the preview, the cursor on the first line containing `needle`
-    local function press(lhs, needle)
-        if needle then h.cursor_at(needle, needle:match("[%w_]+")) end
-        vim.fn.maparg(lhs, "n", false, true).callback()
-    end
+    local preview = h.rename_preview
+    local function press(lhs, needle) h.preview_press(lhs, needle) end
     local function rows()
         return vim.api.nvim_buf_get_lines(preview(), 0, -1, false)
     end
@@ -134,7 +120,6 @@ describe("rename by what the name resolves to", function()
         actions.rename()
         if keys ~= false then
             if preview() then
-                vim.api.nvim_set_current_buf(preview())
                 for _, k in ipairs(keys or { { "<CR>" } }) do press(k[1], k[2]) end
             end
         end
@@ -199,7 +184,6 @@ describe("rename by what the name resolves to", function()
             end
         end
         assert.are.equal(4, inline)
-        vim.api.nvim_set_current_buf(preview())
         press("q")
         assert.is_nil(preview(true))
         assert.are.same(saved[ACC], vim.fn.readfile(h.fixtures .. "/" .. ACC))
@@ -227,7 +211,6 @@ describe("rename by what the name resolves to", function()
         vim.fn.bufload(b)
         vim.api.nvim_buf_set_lines(b, 6, 7, false, { "    a.other = 1" })
         vim.api.nvim_buf_call(b, function() vim.cmd("silent update") end)
-        vim.api.nvim_set_current_buf(preview())
         press("<CR>")
         h.wait(function() return cap.msg ~= nil end)
         assert.is_truthy(cap.msg:find("1 skipped (changed since the preview)", 1, true), cap.msg)
@@ -239,7 +222,6 @@ describe("rename by what the name resolves to", function()
         rename(BANK, 'println("balance")', "println", "say", false)
         local r = rows()
         assert.is_truthy(r[3]:find("every mention of 'println'", 1, true), r[3])
-        vim.api.nvim_set_current_buf(preview())
         press("q")
         assert.are.same(saved[BANK], vim.fn.readfile(h.fixtures .. "/" .. BANK))
     end)
