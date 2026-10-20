@@ -470,8 +470,8 @@ local function toplevel_entity(lines, name)
     local esc = vim.pesc(name)
     for i, l in ipairs(lines) do
         if l:match("^%S") then -- top-level only: no indentation
-            for _, k in ipairs({ "class", "interface", "object" }) do
-                local s = l:match("^[%l ]*" .. k .. "%s+()" .. esc .. "%f[%W]")
+            for _, k in ipairs({ "class", "interface", "object", "enum", "record", "@interface" }) do
+                local s = l:match("^[%l ]*" .. vim.pesc(k) .. "%s+()" .. esc .. "%f[%W]")
                 if s then return k, i, s - 1 end
             end
             local s = l:match("^[%l ]*fun%s+()" .. esc .. "%s*[(<]")
@@ -512,7 +512,9 @@ function M.rename_path(old_path, on_done)
 
         -- detect the entity before moving (read from buffer or disk)
         local entity, elnum, ecol
-        if ext == "kt" then entity, elnum, ecol = toplevel_entity(read_lines(old_path), old_base) end
+        if ext == "kt" or ext == "java" then
+            entity, elnum, ecol = toplevel_entity(read_lines(old_path), old_base)
+        end
 
         local bufnr = vim.fn.bufnr("^" .. old_path .. "$")
         local loaded = bufnr ~= -1 and vim.api.nvim_buf_is_loaded(bufnr)
