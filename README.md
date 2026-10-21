@@ -16,18 +16,40 @@ plugin can't tell which, it shows you the candidates instead of guessing. See
 ## Quick start
 
 You need Neovim 0.10+ and [`ripgrep`](https://github.com/BurntSushi/ripgrep)
-(`rg`), `unzip` and `find` on your `PATH`. With
+(`rg`), `unzip` and `find` on your `PATH`. Install it with any plugin manager,
+for example:
+
 [lazy.nvim](https://github.com/folke/lazy.nvim):
 
 ```lua
 {
-    "olekdia/kotlin-lite.nvim",
+    "albul/kotlin-lite.nvim",
     event = "VeryLazy", -- or ft = { "kotlin" } if you don't need the <leader>k project maps before a .kt file
     opts = {},
 }
 ```
 
-That's it, no configuration needed. Open a Kotlin file and press `gd`.
+`vim.pack` (Neovim 0.12+):
+
+```lua
+vim.pack.add({ "https://github.com/albul/kotlin-lite.nvim" })
+```
+
+or a native package:
+
+```sh
+git clone https://github.com/albul/kotlin-lite.nvim \
+    ~/.local/share/nvim/site/pack/plugins/start/kotlin-lite.nvim
+```
+
+No configuration needed: open a Kotlin file and press `gd`. To change an
+option, call `require("kotlin-lite").setup({ ... })`, or with lazy.nvim put it
+in `opts` (see [Configuration](#configuration)).
+
+Optional: [snacks.nvim] or Telescope for the pickers (without them, lists use
+`vim.ui.select`), and the kotlin treesitter parser for the
+[extra folds and highlighting](#folds-and-highlighting) (LazyVim's
+`lang.kotlin` extra or nvim-treesitter installs it).
 
 The project root is the directory Neovim was started in. In a Gradle project
 the plugin fetches your dependencies' sources in the background the first
@@ -505,7 +527,7 @@ A `$name` template in a string is highlighted like `${...}` already is: `$` as
 plain string text.
 
 Both come from the plugin's `queries/kotlin/`. A file you opened before the
-plugin loaded (`event = "VeryLazy"`) picks them up when it does.
+plugin loaded (lazy.nvim's `event = "VeryLazy"`) picks them up when it does.
 
 ### Breadcrumbs
 
@@ -525,7 +547,9 @@ statusline, where LazyVim shows LSP symbols for other languages:
 }
 ```
 
-or in the winbar: `vim.o.winbar = "%{v:lua.require'kotlin-lite.breadcrumbs'.get()}"`.
+Without lazy.nvim, the same goes into your own lualine setup:
+`lualine_c = { "filename", function() return require("kotlin-lite.breadcrumbs").get() end }`.
+Or in the winbar: `vim.o.winbar = "%{v:lua.require'kotlin-lite.breadcrumbs'.get()}"`.
 
 ### snacks.nvim explorer
 
@@ -558,6 +582,8 @@ Hook it into your snacks config:
     },
 }
 ```
+
+Without lazy.nvim, pass the same to `require("snacks").setup({ picker = { ... } })`.
 
 `<leader>ke` reveals the current file in the explorer. Without snacks it shows
 a warning; set `snacks_integration = false` to make it do nothing instead.

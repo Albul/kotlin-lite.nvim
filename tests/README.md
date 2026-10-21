@@ -53,4 +53,23 @@ Requirements:
 - `git`, `python3` and a C compiler for the one-time hererocks build, plus
   readline headers (`libreadline-dev` / `readline-devel`).
 
+## 4. Without lazy.nvim (vanilla smoke test)
+
+```sh
+tests/vanilla/run.sh                  # with the nvim on PATH
+tests/vanilla/docker.sh               # in Docker: v0.10.4, v0.11.7, v0.12.6
+tests/vanilla/docker.sh v0.12.6 nightly
+```
+
+Installs the plugin in a throwaway XDG home, with no other plugin, no snacks /
+Telescope and no kotlin treesitter parser, and runs it three times: as a
+native package (`pack/smoke/start`) with no `init.lua` at all (default `\`
+leader); as a native package with an `init.lua` that sets `mapleader = " "`
+and calls `setup({...})`; and, on 0.12+, installed by `vim.pack.add()` from a
+git snapshot of the working tree (uncommitted changes included). Each time it
+checks that the plugin loads and attaches, the `<leader>` maps follow
+`mapleader`, `gd` jumps, `gO` falls back to `vim.ui.select`, and nothing
+errors; the last two also check the global `<leader>k` maps in a gradle
+project (`tests/vanilla/check.lua`). Exits non-zero on any failure.
+
 [minit]: https://github.com/folke/lazy.nvim/blob/main/lua/lazy/minit.lua
