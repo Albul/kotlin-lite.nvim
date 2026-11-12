@@ -173,6 +173,7 @@ describe("gd skips what other files can't expose", function()
         { "unqualified call -> top-level fun, not a member of another class", "Main.kt", "val rectArea = area(", "area", 1, "Geometry.kt", "fun area(width", "area" },
         { "member call -> the member", "Main.kt", "println(circle.area())", "area", 1, "Geometry.kt", "fun area(): Double", "area" },
         { "member in a string template, not a same-named local", "Main.kt", "circle with radius", "radius", 2, "Geometry.kt", "class Circle(val radius", "radius" },
+        { "class literal argument (X::class) is not a `name: Type` param", "gd/classref/StartService.kt", "::class.java", "PracticeForegroundService", 1, "gd/classref/service/PracticeForegroundService.kt", "class PracticeForegroundService", "PracticeForegroundService" },
     })
 end)
 

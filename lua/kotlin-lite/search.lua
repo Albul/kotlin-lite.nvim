@@ -182,7 +182,7 @@ function M.buffer_decl_patterns(w)
         -- class / interface / object / typealias
         { "type", [=[\<\%(class\|interface\|object\|typealias\)\s\+\zs\<]=] .. w .. [=[\>]=] },
         -- function / constructor / catch parameter: "(name:" or ", name:"
-        { "param", [=[[(,]\s*\%(vararg\s\+\|noinline\s\+\|crossinline\s\+\)\?\zs\<]=] .. w .. [=[\>\ze\s*:]=] },
+        { "param", [=[[(,]\s*\%(vararg\s\+\|noinline\s\+\|crossinline\s\+\)\?\zs\<]=] .. w .. [=[\>\ze\s*:\%(:\)\@!]=] },
         -- parameter on its own line in a multi-line signature: "name: Type,"
         { "param", [=[^\s*\zs\<]=] .. w .. [=[\>\ze\s*:[^:]]=] },
         -- lambda parameter: "name ->" or "name: Type ->"
